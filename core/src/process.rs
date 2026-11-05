@@ -108,7 +108,15 @@ struct Inner {
     reached_running: bool,
 }
 
+/// Перехват ответа на служебную команду (TPS): строки не попадают в консоль.
+struct Quiet {
+    re: Regex,
+    until: Instant,
+    tx: Sender<String>,
+}
+
 pub struct Instance {
+    quiet: Mutex<Option<Quiet>>,
     id: String,
     inner: Mutex<Inner>,
     log: Mutex<VecDeque<LogLine>>,
@@ -165,6 +173,7 @@ fn is_exception_head(s: &str) -> bool {
 impl Instance {
     fn new(id: &str, cap: usize) -> Self {
         Self {
+            quiet: Mutex::new(None),
             id: id.to_string(),
             inner: Mutex::new(Inner {
                 child: None,
@@ -361,6 +370,18 @@ impl ProcessManager {
                     if is_err && level == Level::Info {
                         level = Level::Warn;
                     }
+                    // ответ на тихий запрос — не показываем в консоли
+                    {
+                        let mut q = inst.quiet.lock().unwrap();
+                        if let Some(qq) = q.as_ref() {
+                            if Instant::now() > qq.until {
+                                *q = None;
+                            } else if qq.re.is_match(&text) {
+                                let _ = qq.tx.send(text);
+                                continue;
+                            }
+                        }
+                    }
                     self.analyze_line(&inst, &text);
                     batch.push(inst.push(level, text));
                 }
@@ -460,16 +481,42 @@ impl ProcessManager {
         Ok(())
     }
 
+    /// Тихая команда: отправить и собрать строки ответа, подходящие под `pattern`,
+    /// в течение `window`. Эти строки не попадают в консоль.
+    pub fn query(&self, id: &str, command: &str, pattern: &str, window: Duration) -> Result<Vec<String>> {
+        let inst = self.instance(id);
+        let re = Regex::new(pattern).map_err(|e| Error::other(e.to_string()))?;
+        let (tx, rx) = mpsc::channel();
+        *inst.quiet.lock().unwrap() = Some(Quiet { re, until: Instant::now() + window, tx });
+        {
+            let mut i = inst.inner.lock().unwrap();
+            let stdin = i.stdin.as_mut().ok_or(Error::NotRunning)?;
+            stdin.write_all(format!("{}\n", command.trim()).as_bytes())?;
+            stdin.flush()?;
+        }
+        let deadline = Instant::now() + window;
+        let mut out = Vec::new();
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match rx.recv_timeout(left) {
+                Ok(l) => out.push(l),
+                Err(_) => break,
+            }
+        }
+        *inst.quiet.lock().unwrap() = None;
+        Ok(out)
+    }
+
     /// Мягкая остановка: `stop`, затем через `timeout` — принудительно.
     pub fn stop(self: &Arc<Self>, id: &str, timeout: Duration) -> Result<()> {
         let inst = self.instance(id);
-        {
+        let pid = {
             let mut i = inst.inner.lock().unwrap();
             if i.child.is_none() {
                 return Err(Error::NotRunning);
             }
             i.stop_requested = true;
-        }
+            i.pid
+        };
         self.set_status(&inst, Status::Stopping);
         self.system(id, "■ Остановка (команда stop)…");
         if self.send(id, "stop").is_err() {
@@ -477,17 +524,20 @@ impl ProcessManager {
         }
         let mgr = Arc::clone(self);
         let id = id.to_string();
+        // «сторож» относится только к ЭТОМУ процессу: если сервер уже перезапущен
+        // (другой pid), он ничего не трогает
         thread::spawn(move || {
+            let same = |m: &ProcessManager| m.is_running(&id) && m.status(&id).pid == pid;
             let t0 = Instant::now();
             while t0.elapsed() < timeout {
-                if !mgr.is_running(&id) {
+                if !same(&mgr) {
                     return;
                 }
                 thread::sleep(Duration::from_millis(300));
             }
-            if mgr.is_running(&id) {
+            if same(&mgr) {
                 mgr.system(&id, "⚠ Сервер не остановился вовремя — завершаю принудительно");
-                let _ = mgr.kill(&id);
+                let _ = mgr.kill_pid(&id, pid);
             }
         });
         Ok(())
@@ -507,6 +557,14 @@ impl ProcessManager {
             thread::sleep(Duration::from_millis(250));
         }
         Ok(())
+    }
+
+    /// Завершить, только если это всё ещё тот же процесс.
+    fn kill_pid(&self, id: &str, pid: Option<u32>) -> Result<()> {
+        if self.status(id).pid != pid {
+            return Ok(());
+        }
+        self.kill(id)
     }
 
     /// Принудительное завершение (вместе с дочерними процессами).
@@ -566,6 +624,10 @@ impl ProcessManager {
         while idx < tree.len() {
             let parent = tree[idx];
             for (p, proc_) in sys.processes() {
+                // на Linux потоки видны как «процессы» с той же памятью — их не считаем
+                if proc_.thread_kind().is_some() {
+                    continue;
+                }
                 if proc_.parent() == Some(parent) && !tree.contains(p) {
                     tree.push(*p);
                 }
@@ -633,6 +695,31 @@ mod tests {
         fn exited(&self, _: &str, info: &ExitInfo) {
             self.1.lock().unwrap().push(info.clone());
         }
+    }
+
+    /// Регрессия: «сторож» остановки не должен убивать сервер, запущенный сразу после остановки.
+    #[cfg(unix)]
+    #[test]
+    fn stale_stop_watchdog_does_not_kill_next_run() {
+        let t = tempfile::tempdir().unwrap();
+        let script = t.path().join("s.sh");
+        std::fs::write(
+            &script,
+            "echo '[00:00:00] [Server thread/INFO]: Done (0.1s)! For help, type \"help\"'\n\
+             while read l; do if [ \"$l\" = stop ]; then exit 0; fi; done\n",
+        )
+        .unwrap();
+        let sink = Arc::new(Sink(Mutex::new(vec![]), Mutex::new(vec![])));
+        let mgr = Arc::new(ProcessManager::new(sink.clone(), 1000));
+        let cmd = LaunchCommand { program: "sh".into(), args: vec![script.to_string_lossy().into()], cwd: t.path().into(), display: "s".into() };
+        mgr.start("x", &cmd).unwrap();
+        thread::sleep(Duration::from_millis(400));
+        // короткий таймаут сторожа: 2 с
+        mgr.stop_and_wait("x", Duration::from_secs(2)).unwrap();
+        mgr.start("x", &cmd).unwrap();
+        thread::sleep(Duration::from_secs(3)); // сторож прошлого запуска уже «истёк»
+        assert_eq!(mgr.status("x").status, Status::Running, "новый процесс убит старым сторожем");
+        mgr.stop_and_wait("x", Duration::from_secs(5)).unwrap();
     }
 
     /// Имитация сервера: sh-скрипт печатает «Done», ждёт stop и выходит.

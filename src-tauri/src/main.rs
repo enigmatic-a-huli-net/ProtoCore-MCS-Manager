@@ -8,7 +8,9 @@
 // без чёрного окна консоли в релизной сборке Windows
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bisect_run;
 mod commands;
+mod scheduler;
 mod state;
 
 use std::collections::HashSet;
@@ -82,6 +84,8 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .manage(scheduler::Sched::default())
+        .manage(bisect_run::BisectState::default())
         .manage(AppState {
             paths,
             config: Mutex::new(config),
@@ -93,6 +97,7 @@ fn main() {
         })
         .setup(move |app| {
             let _ = sink.app.set(app.handle().clone());
+            scheduler::start(app.handle().clone());
 
             let open = MenuItem::with_id(app, "open", "Открыть / Open", true, None::<&str>)?;
             let exit = MenuItem::with_id(app, "quit", "Выход / Quit", true, None::<&str>)?;
@@ -181,6 +186,11 @@ fn main() {
             commands::catalog_fix,
             commands::check_cf_key,
             commands::open_path,
+            commands::get_monitor,
+            commands::bisect_start,
+            commands::bisect_cancel,
+            commands::bisect_info,
+            commands::get_advice,
             commands::analyze_logs,
             commands::save_compressed,
             commands::quarantine_mod,

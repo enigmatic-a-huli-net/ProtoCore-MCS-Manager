@@ -63,6 +63,21 @@ export interface ServerEntry {
     quarantine_max_rounds: number;
   };
   auto_restart: boolean;
+  schedule: ScheduleSettings;
+}
+
+export interface ScheduleSettings {
+  tps_enabled: boolean;
+  tps_interval_sec: number;
+  restart_enabled: boolean;
+  restart_mode: "interval" | "times";
+  restart_hours: number;
+  restart_times: string[];
+  warn_minutes: number[];
+  warn_message: string;
+  skip_if_players: boolean;
+  backup_enabled: boolean;
+  backup_time: string;
 }
 
 export interface Config {
@@ -265,6 +280,12 @@ export const api = {
   checkCfKey: (key: string) => invoke<string>("check_cf_key", { key }),
   catFix: (id: string, modId: string, range: string) => invoke<Plan>("catalog_fix", { id, modId, range }),
 
+  monitor: (id: string) => invoke<MonitorInfo>("get_monitor", { id }),
+  advice: (id: string) => invoke<Advice[]>("get_advice", { id }),
+  bisectStart: (id: string, settings: BisectSettings) => invoke<void>("bisect_start", { id, settings }),
+  bisectCancel: (id: string) => invoke<void>("bisect_cancel", { id }),
+  bisectInfo: (id: string) => invoke<{ running: boolean; last: BisectReport | null; test_id: string }>("bisect_info", { id }),
+
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
 };
@@ -381,4 +402,29 @@ export function compact(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
   return String(n);
+}
+
+export interface Tps { tps: number; mspt: number | null; mspt_peak: number | null; via: string; ts: number }
+export interface MonitorInfo { history: Tps[]; next_restart: number | null; next_backup: number | null }
+
+export type AdviceAction =
+  | { kind: "install_mod"; slug: string; name: string }
+  | { kind: "set_props"; changes: [string, string][] }
+  | { kind: "set_memory"; mb: number }
+  | { kind: "set_preset"; preset: "aikar" | "zgc" | "none" }
+  | { kind: "command"; cmd: string }
+  | { kind: "open_tab"; tab: string };
+export interface Advice { id: string; level: "warn" | "tip" | "ok"; title: string; detail: string; action: AdviceAction | null; action_label: string }
+
+export interface BisectSettings { mode: "batch" | "binary"; batch: number; timeout_sec: number; memory_mb: number; find_all: boolean; keep_copy: boolean }
+export type Outcome = { kind: "ok" } | { kind: "crash"; detail: string } | { kind: "hang" } | { kind: "error"; detail: string };
+export interface BisectStep { n: number; label: string; mods: number; outcome: Outcome; seconds: number }
+export interface BisectReport {
+  steps: BisectStep[];
+  culprits: { file: string; name: string; reason: string }[];
+  group: string[];
+  baseline_failed: boolean;
+  all_ok: boolean;
+  cancelled: boolean;
+  message: string;
 }

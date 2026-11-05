@@ -244,6 +244,50 @@ impl Default for ModSettings {
     }
 }
 
+// ---------------------------------------------------------------- расписание
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScheduleSettings {
+    /// Опрашивать TPS/MSPT
+    pub tps_enabled: bool,
+    pub tps_interval_sec: u32,
+    /// Плановый рестарт
+    pub restart_enabled: bool,
+    /// "interval" — каждые N часов работы; "times" — в указанное время
+    pub restart_mode: String,
+    pub restart_hours: u32,
+    /// «06:00», «18:00»
+    pub restart_times: Vec<String>,
+    /// За сколько минут предупреждать игроков
+    pub warn_minutes: Vec<u32>,
+    /// Текст предупреждения, {min} — минуты
+    pub warn_message: String,
+    /// Не перезапускать, если на сервере есть игроки (переносится на позже)
+    pub skip_if_players: bool,
+    /// Ночной бэкап
+    pub backup_enabled: bool,
+    pub backup_time: String,
+}
+
+impl Default for ScheduleSettings {
+    fn default() -> Self {
+        Self {
+            tps_enabled: true,
+            tps_interval_sec: 30,
+            restart_enabled: false,
+            restart_mode: "interval".into(),
+            restart_hours: 8,
+            restart_times: vec!["06:00".into()],
+            warn_minutes: vec![15, 5, 1],
+            warn_message: "Сервер перезапустится через {min} мин. Плановый рестарт.".into(),
+            skip_if_players: false,
+            backup_enabled: false,
+            backup_time: "04:00".into(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------- сервер
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +306,7 @@ pub struct ServerEntry {
     pub mods: ModSettings,
     /// Перезапускать при падении
     pub auto_restart: bool,
+    pub schedule: ScheduleSettings,
 }
 
 impl Default for ServerEntry {
@@ -278,6 +323,7 @@ impl Default for ServerEntry {
             backup: BackupSettings::default(),
             mods: ModSettings::default(),
             auto_restart: false,
+            schedule: ScheduleSettings::default(),
         }
     }
 }

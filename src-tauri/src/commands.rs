@@ -394,17 +394,30 @@ pub fn kill_server(state: State<AppState>, id: String) -> R<()> {
     state.pm.kill(&id).map_err(e)
 }
 
+pub fn restart_blocking(app: &AppHandle, id: &str) -> R<()> {
+    let state = app.state::<AppState>();
+    let _g = BusyGuard::acquire(&state, id)?;
+    let t = server_of(&state, id)?.launch.stop_timeout_sec.max(10);
+    state.pm.system(id, "↻ Перезапуск…");
+    state.pm.stop_and_wait(id, Duration::from_secs(t as u64)).map_err(e)?;
+    start_inner(app, id, true)
+}
+
 #[tauri::command]
 pub async fn restart_server(app: AppHandle, id: String) -> R<()> {
-    bg(move || {
-        let state = app.state::<AppState>();
-        let _g = BusyGuard::acquire(&state, &id)?;
-        let t = server_of(&state, &id)?.launch.stop_timeout_sec.max(10);
-        state.pm.system(&id, "↻ Перезапуск…");
-        state.pm.stop_and_wait(&id, Duration::from_secs(t as u64)).map_err(e)?;
-        start_inner(&app, &id, true)
-    })
-    .await
+    bg(move || restart_blocking(&app, &id)).await
+}
+
+pub fn backup_blocking(app: &AppHandle, id: &str, tag: &str) -> R<BackupResult> {
+    let state = app.state::<AppState>();
+    let _g = BusyGuard::acquire(&state, id)?;
+    let s = server_of(&state, id)?;
+    snapshot_with_events(app, &s, tag)
+}
+
+#[tauri::command]
+pub fn get_monitor(app: AppHandle, id: String) -> crate::scheduler::MonitorInfo {
+    crate::scheduler::info(&app, &id)
 }
 
 #[tauri::command]
@@ -534,10 +547,7 @@ pub async fn list_snapshots(app: AppHandle, id: String) -> R<SnapshotList> {
 #[tauri::command]
 pub async fn backup_now(app: AppHandle, id: String) -> R<BackupResult> {
     bg(move || {
-        let state = app.state::<AppState>();
-        let _g = BusyGuard::acquire(&state, &id)?;
-        let s = server_of(&state, &id)?;
-        snapshot_with_events(&app, &s, "manual")
+        backup_blocking(&app, &id, "manual")
     })
     .await
 }
@@ -987,4 +997,66 @@ pub fn open_path(app: AppHandle, path: String, reveal: bool) -> R<()> {
     } else {
         app.opener().open_path(p.to_string_lossy(), None::<&str>).map_err(e)
     }
+}
+
+// ===================================================================== автоперебор
+
+#[tauri::command]
+pub fn bisect_start(app: AppHandle, id: String, settings: pcm_core::bisect::BisectSettings) -> R<()> {
+    crate::bisect_run::start(app, id, settings)
+}
+
+#[tauri::command]
+pub fn bisect_cancel(app: AppHandle, id: String) {
+    if let Some(c) = app.state::<crate::bisect_run::BisectState>().running.lock().unwrap().get(&id) {
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[derive(Serialize)]
+pub struct BisectInfo {
+    running: bool,
+    last: Option<pcm_core::bisect::Report>,
+    test_id: String,
+}
+
+#[tauri::command]
+pub fn bisect_info(app: AppHandle, id: String) -> BisectInfo {
+    let bs = app.state::<crate::bisect_run::BisectState>();
+    let running = bs.running.lock().unwrap().contains_key(&id);
+    let last = bs.last.lock().unwrap().get(&id).cloned();
+    BisectInfo { running, last, test_id: crate::bisect_run::test_id(&id) }
+}
+
+// ===================================================================== советы
+
+#[tauri::command]
+pub async fn get_advice(app: AppHandle, id: String) -> R<Vec<pcm_core::advice::Advice>> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        let dir = s.dir();
+        let report = s.core.supports_mods().then(|| mods::list(&dir, s.core.mod_loader(), &s.mods));
+        let plugin_names: Vec<String> = if s.core.supports_plugins() {
+            plugins::list(&dir).plugins.into_iter().filter(|p| p.enabled).map(|p| p.name).collect()
+        } else {
+            vec![]
+        };
+        let java = if s.launch.java_path.trim().is_empty() { "java".to_string() } else { s.launch.java_path.clone() };
+        let java_major = cores::java_version(&java).ok().and_then(|v| pcm_core::advice::java_major(&v));
+        let lag = std::fs::read_to_string(dir.join("logs/latest.log"))
+            .map(|t| t.lines().filter(|l| l.contains("Can't keep up!")).count())
+            .unwrap_or(0);
+        let sys_mb = state.pm.metrics(&id).system_ram_total / 1024 / 1024;
+        Ok(pcm_core::advice::advise(&pcm_core::advice::Input {
+            server: &s,
+            mods: report.as_ref(),
+            plugin_names,
+            props: props::read(&dir),
+            system_ram_mb: sys_mb,
+            java_major,
+            lag_warnings: lag,
+        }))
+    })
+    .await
 }

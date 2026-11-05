@@ -16,8 +16,10 @@
 //!
 //! Интерфейс (src-tauri + ui) только вызывает функции отсюда.
 
+pub mod advice;
 pub mod analyze;
 pub mod backup;
+pub mod bisect;
 pub mod catalog;
 pub mod config;
 pub mod cores;
@@ -29,6 +31,8 @@ pub mod net;
 pub mod plugins;
 pub mod process;
 pub mod props;
+pub mod schedule;
+pub mod tps;
 pub mod update;
 pub mod util;
 

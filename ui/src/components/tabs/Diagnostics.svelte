@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "../Icon.svelte";
-  import { api, type Analysis, type Culprit, type ServerEntry } from "../../lib/api";
+  import Bisect from "./Bisect.svelte";
+  import { api, supportsMods, type Analysis, type Culprit, type ServerEntry } from "../../lib/api";
   import { app, t, toast, fail } from "../../lib/store.svelte";
   import type { Key } from "../../lib/i18n";
 
@@ -166,6 +167,7 @@
   {:else if loading}
     <div class="empty">…</div>
   {/if}
+  {#if supportsMods(server.core)}<Bisect {server} />{/if}
 </div>
 
 <style>

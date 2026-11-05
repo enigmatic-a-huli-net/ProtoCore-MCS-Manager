@@ -1,9 +1,9 @@
 // Общее состояние интерфейса (Svelte 5 runes).
-import { api, on, type Kind, type Plan, type UpdateInfo, type AppSnapshot, type BackupEvent, type Config, type LogLine, type ServerEntry, type StatusInfo } from "./api";
+import { api, on, type BisectReport, type BisectStep, type Tps, type Kind, type Plan, type UpdateInfo, type AppSnapshot, type BackupEvent, type Config, type LogLine, type ServerEntry, type StatusInfo } from "./api";
 import { translate, type Key } from "./i18n";
 import { applyTheme } from "./theme";
 
-export type Tab = "console" | "diag" | "mods" | "plugins" | "backups" | "launch" | "properties";
+export type Tab = "console" | "diag" | "mods" | "plugins" | "backups" | "schedule" | "optimize" | "launch" | "properties";
 
 interface Toast { id: number; kind: "info" | "ok" | "error"; text: string }
 
@@ -28,6 +28,8 @@ export const app = $state({
   plan: null as { id: string; kind: Kind; plan: Plan; onDone?: () => void } | null,
   catalogProgress: null as { title: string; done: number; total: number } | null,
   createLog: [] as string[],
+  tps: {} as Record<string, Tps>,
+  bisect: {} as Record<string, { running: boolean; status: string; steps: BisectStep[]; report: BisectReport | null }>,
   createProgress: null as { done: number; total: number } | null,
 });
 
@@ -107,6 +109,13 @@ export async function init() {
   await on<{ id: string; mods: { name: string }[] }>("pcm://quarantine", ({ id, mods }) => {
     const s = app.config?.servers.find((x) => x.id === id);
     toast(`${s?.name ?? ""}: ${t("dg.qEvent", { list: mods.map((m) => m.name).join(", ") })}`, "info");
+  });
+  await on<{ id: string; tps: Tps }>("pcm://tps", ({ id, tps }) => (app.tps[id] = tps));
+  await on<{ type: "step" | "status" | "done"; id: string; step?: BisectStep; text?: string; report?: BisectReport }>("pcm://bisect", (ev) => {
+    const b = (app.bisect[ev.id] ??= { running: true, status: "", steps: [], report: null });
+    if (ev.type === "step" && ev.step) b.steps = [...b.steps, ev.step];
+    if (ev.type === "status" && ev.text) { b.status = ev.text; b.running = true; }
+    if (ev.type === "done") { b.running = false; b.report = ev.report ?? null; b.status = ""; }
   });
   await on<{ id: string; title: string; done: number; total: number }>("pcm://catalog", (p) => (app.catalogProgress = p));
   await on<{ id: string; line: string | null; done: number; total: number }>("pcm://create", (p) => {

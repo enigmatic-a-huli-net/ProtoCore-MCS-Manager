@@ -178,6 +178,7 @@ rx!(r_suspected_item, r"([^,()]+?)\s*\(([\w\-]+)\)");
 rx!(r_java_ver, r"class file version (\d+)\.\d+\), this version of the Java Runtime only recognizes class file versions up to (\d+)");
 rx!(r_cant_keep_up, r"Can't keep up! Is the server overloaded\? Running (\d+)ms or (\d+) ticks behind");
 rx!(r_port, r"(?i)FAILED TO BIND TO PORT|Address already in use");
+rx!(r_locked, r"(?i)session\.lock: already locked|DirectoryLock\$LockException");
 rx!(r_oom, r"OutOfMemoryError");
 rx!(r_watchdog, r"(?i)(A single server tick took [\d.]+ seconds|Server Watchdog|ServerHangWatchdog)");
 rx!(r_chunk, r"(?i)(Failed to (?:read|load) chunk|Couldn't load chunk|Chunk file at \[.+\] is in the wrong location|Region file .* corrupt)");
@@ -485,6 +486,19 @@ pub fn analyze_text(text: &str, idx: &ModIndex) -> Vec<Finding> {
                     "Порт сервера уже занят".into(),
                     "Скорее всего, уже запущен другой сервер или старый процесс не закрылся.".into(),
                     "Останови другой сервер или смени server-port в server.properties.",
+                    line,
+                )
+            });
+            continue;
+        }
+        if r_locked().is_match(line) {
+            b.add("world_locked".into(), || {
+                finding(
+                    "world_locked",
+                    Severity::Error,
+                    "Мир уже открыт другим процессом сервера".into(),
+                    "Файл world/session.lock занят — скорее всего, прошлый запуск сервера ещё работает в фоне (например, после аварийного закрытия менеджера).".into(),
+                    "Открой Диспетчер задач → «Подробности», заверши процесс java.exe этого сервера и запусти снова. Если ничего не запущено — удали world/session.lock.",
                     line,
                 )
             });
@@ -831,7 +845,7 @@ pub fn quarantine_candidates(findings: &[Finding], allow_content: bool, min: Con
     let mut out: Vec<(Culprit, String)> = Vec::new();
     for f in findings {
         // отсутствующую зависимость карантином не исправить
-        if f.code == "missing_dep" || f.code == "wrong_version" || f.code == "duplicate" || f.code == "eula" || f.code == "port" || f.code == "oom" || f.code == "java_version" {
+        if f.code == "missing_dep" || f.code == "wrong_version" || f.code == "world_locked" || f.code == "duplicate" || f.code == "eula" || f.code == "port" || f.code == "oom" || f.code == "java_version" {
             continue;
         }
         for c in &f.culprits {
@@ -1003,6 +1017,8 @@ java.lang.UnsupportedClassVersionError: x has been compiled by a more recent ver
         assert!(jv.title.contains("Java 21") && jv.title.contains("Java 17"));
         assert!(f.iter().any(|x| x.code == "lag"));
         assert!(f.iter().any(|x| x.code == "port"));
+        let f2 = analyze_text("net.minecraft.util.DirectoryLock$LockException: /srv/./world/session.lock: already locked (possibly by other Minecraft instance?)", &idx);
+        assert!(f2.iter().any(|x| x.code == "world_locked"));
     }
 
     #[test]

@@ -9,6 +9,8 @@
   import Backups from "./tabs/Backups.svelte";
   import Launch from "./tabs/Launch.svelte";
   import Properties from "./tabs/Properties.svelte";
+  import Schedule from "./tabs/Schedule.svelte";
+  import Optimize from "./tabs/Optimize.svelte";
   import { api, bytes, CORE_LABEL, supportsMods, supportsPlugins, type Metrics, type ServerEntry } from "../lib/api";
   import { app, status, t, fail, startServer, type Tab } from "../lib/store.svelte";
   import type { Key } from "../lib/i18n";
@@ -18,6 +20,7 @@
   const st = $derived(status(server.id));
   const live = $derived(st.status === "running" || st.status === "starting" || st.status === "stopping");
   const busy = $derived(app.backup[server.id]);
+  const tps = $derived(st.status === "running" ? app.tps[server.id] : undefined);
 
   let metrics = $state<Metrics | null>(null);
   let uptime = $state(0);
@@ -58,6 +61,8 @@
       { id: "mods", icon: "puzzle", show: supportsMods(server.core) || server.core === "unknown" },
       { id: "plugins", icon: "plug", show: supportsPlugins(server.core) },
       { id: "backups", icon: "archive", show: true },
+      { id: "schedule", icon: "restart", show: true },
+      { id: "optimize", icon: "rocket", show: true },
       { id: "launch", icon: "sliders", show: true },
       { id: "properties", icon: "file", show: true },
     ].filter((x) => x.show) as { id: Tab; icon: string }[],
@@ -93,6 +98,10 @@
 
     <div class="stats">
       <div><span>{t("hdr.players")}</span><b>{live ? st.players.length : "—"}</b></div>
+      <div title={tps?.mspt != null ? t("hdr.mspt", { v: tps.mspt.toFixed(1) }) : ""}>
+        <span>{t("hdr.tps")}</span>
+        <b class:tps-ok={tps && tps.tps >= 19.5} class:tps-mid={tps && tps.tps >= 15 && tps.tps < 19.5} class:tps-bad={tps && tps.tps < 15}>{tps ? tps.tps.toFixed(1) : "—"}</b>
+      </div>
       <div><span>{t("hdr.ram")}</span><b>{metrics ? bytes(metrics.ram_bytes) : "—"}</b></div>
       <div><span>{t("hdr.cpu")}</span><b>{metrics ? `${Math.round(metrics.cpu / Math.max(1, metrics.cores))}%` : "—"}</b></div>
       <div><span>{t("hdr.uptime")}</span><b>{live ? fmtUptime(uptime) : "—"}</b></div>
@@ -141,6 +150,8 @@
     {:else if app.tab === "mods"}<Mods {server} />
     {:else if app.tab === "plugins"}<Plugins {server} />
     {:else if app.tab === "backups"}<Backups {server} />
+    {:else if app.tab === "schedule"}<Schedule {server} />
+    {:else if app.tab === "optimize"}<Optimize {server} />
     {:else if app.tab === "launch"}<Launch {server} />
     {:else if app.tab === "properties"}<Properties {server} />
     {/if}
@@ -204,13 +215,18 @@
   .stats div { display: grid; text-align: right; }
   .stats span { font-size: 0.78em; color: var(--muted); }
   .stats b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tps-ok { color: var(--ok); }
+  .tps-mid { color: var(--warn); }
+  .tps-bad { color: var(--err); }
   .actions { display: flex; gap: 8px; }
 
   .progress { position: relative; margin: 0 22px 8px; height: 24px; border-radius: 6px; background: var(--surface-2); overflow: hidden; }
   .progress .bar { position: absolute; inset: 0 auto 0 0; background: var(--accent-soft); transition: width 0.25s; }
   .progress span { position: relative; display: block; padding: 3px 10px; font-size: 0.82em; color: var(--muted); }
 
-  .tabs { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  .tabs { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { flex: none; }
   .tabs button {
     display: inline-flex;
     align-items: center;
