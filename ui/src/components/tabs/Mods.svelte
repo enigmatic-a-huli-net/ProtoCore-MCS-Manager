@@ -2,11 +2,14 @@
   import { ask } from "@tauri-apps/plugin-dialog";
   import { openPath } from "@tauri-apps/plugin-opener";
   import Icon from "../Icon.svelte";
+  import Catalog from "./Catalog.svelte";
+  import Updates from "./Updates.svelte";
   import { api, bytes, supportsMods, type ModInfo, type ModReport, type ServerEntry } from "../../lib/api";
-  import { status, t, toast, fail } from "../../lib/store.svelte";
+  import { app, status, t, toast, fail } from "../../lib/store.svelte";
   import type { Key } from "../../lib/i18n";
 
   let { server }: { server: ServerEntry } = $props();
+  let view = $state<"installed" | "find" | "updates">("installed");
 
   type Filter = "all" | "enabled" | "disabled" | "problems" | "client";
   let report = $state<ModReport | null>(null);
@@ -79,6 +82,19 @@
     }
   }
 
+  let fixing = $state("");
+  async function fixDep(modId: string, range: string) {
+    fixing = modId;
+    try {
+      const plan = await api.catFix(server.id, modId, range);
+      app.plan = { id: server.id, kind: "mod", plan, onDone: load };
+    } catch (e) {
+      fail(e);
+    } finally {
+      fixing = "";
+    }
+  }
+
   async function enableFile(file: string) {
     try {
       await api.setMod(server.id, file, true);
@@ -107,6 +123,18 @@
   <div class="empty">{t("mods.unsupported")}</div>
 {:else}
   <div class="wrapx">
+    <div class="views">
+      {#each ["installed", "find", "updates"] as const as v}
+        <button class:on={view === v} onclick={() => (view = v)}>
+          <Icon name={v === "installed" ? "puzzle" : v === "find" ? "search" : "download"} size={14} />{t(`cat.${v}` as Key)}
+        </button>
+      {/each}
+    </div>
+    {#if view === "find"}
+      <Catalog {server} kind="mod" onInstalled={load} />
+    {:else if view === "updates"}
+      <Updates {server} kind="mod" onUpdated={load} />
+    {:else}
     <div class="bar">
       <div class="search">
         <Icon name="search" size={14} />
@@ -146,6 +174,10 @@
                     <button class="btn sm" onclick={() => enableFile(d.disabled_file!)}>
                       {t("mods.enableIt")} {d.disabled_file}
                     </button>
+                  {:else}
+                    <button class="btn sm" disabled={fixing === d.id} onclick={() => fixDep(d.id, "")}>
+                      <Icon name="download" size={13} />{t("fix.find")}
+                    </button>
                   {/if}
                 </li>
               {/each}
@@ -160,7 +192,9 @@
                 <li>
                   <b>{report.mods.find((m) => m.file === w.file)?.name ?? w.id}</b>
                   <span class="muted">{t("mods.wrongVerRow", { have: w.have, need: w.need_human, by: w.needed_by })}</span>
-                  <span class="muted mono small">{w.file}</span>
+                  <button class="btn sm" disabled={fixing === w.id} onclick={() => fixDep(w.id, w.need)}>
+                    <Icon name="download" size={13} />{t("fix.button")}
+                  </button>
                 </li>
               {/each}
             </ul>
@@ -252,10 +286,14 @@
         </div>
       {/each}
     </div>
+    {/if}
   </div>
 {/if}
 
 <style>
+  .views { display: flex; gap: 2px; padding: 3px; background: var(--surface-2); border-radius: calc(var(--radius) * 0.8); width: max-content; }
+  .views button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 0; border-radius: calc(var(--radius) * 0.6); background: none; color: var(--muted); font: inherit; font-size: 0.9em; cursor: pointer; }
+  .views button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 0.15); }
   .wrapx { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 12px 16px 0; gap: 10px; }
   .bar { display: flex; align-items: center; gap: 10px; }
   .search { position: relative; flex: 0 1 230px; min-width: 140px; color: var(--muted); }

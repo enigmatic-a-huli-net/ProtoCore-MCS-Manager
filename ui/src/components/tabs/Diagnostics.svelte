@@ -2,7 +2,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import Icon from "../Icon.svelte";
   import { api, type Analysis, type Culprit, type ServerEntry } from "../../lib/api";
-  import { t, toast, fail } from "../../lib/store.svelte";
+  import { app, t, toast, fail } from "../../lib/store.svelte";
   import type { Key } from "../../lib/i18n";
 
   let { server }: { server: ServerEntry } = $props();
@@ -36,6 +36,19 @@
       toast(t("dg.quarantined", { name: c.name }), "ok");
     } catch (e) {
       fail(e);
+    }
+  }
+
+  let fixing = $state("");
+  async function fix(modId: string, range: string) {
+    fixing = modId;
+    try {
+      const plan = await api.catFix(server.id, modId, range);
+      app.plan = { id: server.id, kind: "mod", plan, onDone: run };
+    } catch (e) {
+      fail(e);
+    } finally {
+      fixing = "";
     }
   }
 
@@ -98,6 +111,13 @@
             </header>
             {#if f.detail}<p>{f.detail}</p>{/if}
             {#if f.hint}<p class="hint">{f.hint}</p>{/if}
+            {#if f.fix}
+              <div>
+                <button class="btn sm primary" disabled={fixing === f.fix.mod_id} onclick={() => fix(f.fix!.mod_id, f.fix!.range)}>
+                  <Icon name="download" size={13} />{f.code === "wrong_version" ? t("fix.button") : t("fix.find")}
+                </button>
+              </div>
+            {/if}
 
             {#if f.culprits.length}
               <div class="culprits">

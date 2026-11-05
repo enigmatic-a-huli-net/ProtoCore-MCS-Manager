@@ -2,10 +2,14 @@
   import { ask } from "@tauri-apps/plugin-dialog";
   import { openPath } from "@tauri-apps/plugin-opener";
   import Icon from "../Icon.svelte";
+  import Catalog from "./Catalog.svelte";
+  import Updates from "./Updates.svelte";
   import { api, bytes, type PluginInfo, type PluginReport, type ServerEntry } from "../../lib/api";
   import { status, t, toast, fail } from "../../lib/store.svelte";
+  import type { Key } from "../../lib/i18n";
 
   let { server }: { server: ServerEntry } = $props();
+  let view = $state<"installed" | "find" | "updates">("installed");
 
   let report = $state<PluginReport | null>(null);
   let q = $state("");
@@ -43,6 +47,18 @@
 </script>
 
 <div class="wrapx">
+  <div class="views">
+    {#each ["installed", "find", "updates"] as const as v}
+      <button class:on={view === v} onclick={() => (view = v)}>
+        <Icon name={v === "installed" ? "plug" : v === "find" ? "search" : "download"} size={14} />{t(`cat.${v}` as Key)}
+      </button>
+    {/each}
+  </div>
+  {#if view === "find"}
+    <Catalog {server} kind="plugin" onInstalled={load} />
+  {:else if view === "updates"}
+    <Updates {server} kind="plugin" onUpdated={load} />
+  {:else}
   <div class="bar">
     <div class="search">
       <Icon name="search" size={14} />
@@ -103,9 +119,13 @@
       </div>
     {/each}
   </div>
+  {/if}
 </div>
 
 <style>
+  .views { display: flex; gap: 2px; padding: 3px; background: var(--surface-2); border-radius: calc(var(--radius) * 0.8); width: max-content; }
+  .views button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 0; border-radius: calc(var(--radius) * 0.6); background: none; color: var(--muted); font: inherit; font-size: 0.9em; cursor: pointer; }
+  .views button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 0.15); }
   .wrapx { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 12px 16px 0; gap: 10px; }
   .bar { display: flex; align-items: center; gap: 12px; font-size: 0.92em; }
   .search { position: relative; width: 250px; color: var(--muted); }

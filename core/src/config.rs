@@ -319,6 +319,10 @@ pub struct Config {
     pub check_updates: bool,
     /// Репозиторий GitHub, откуда берутся обновления
     pub update_repo: String,
+    /// API-ключ CurseForge (необязательно; без него CurseForge в каталоге недоступен)
+    pub curseforge_key: String,
+    /// Папка по умолчанию для новых серверов
+    pub servers_root: String,
     /// Последний выбранный сервер
     pub selected: String,
     pub servers: Vec<ServerEntry>,
@@ -333,6 +337,8 @@ impl Default for Config {
             console_lines: 5000,
             check_updates: true,
             update_repo: crate::update::DEFAULT_REPO.into(),
+            curseforge_key: String::new(),
+            servers_root: String::new(),
             selected: String::new(),
             servers: vec![],
         }

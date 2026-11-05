@@ -1,8 +1,8 @@
 <script lang="ts">
   import { open as pick, ask } from "@tauri-apps/plugin-dialog";
   import Icon from "../Icon.svelte";
-  import { api, CORE_LABEL, supportsMods, type CoreKind, type ServerEntry } from "../../lib/api";
-  import { app, t, toast, fail, saveServer, refreshState } from "../../lib/store.svelte";
+  import { api, CORE_LABEL, DOWNLOADABLE, supportsMods, type CoreKind, type ServerEntry } from "../../lib/api";
+  import { app, status, t, toast, fail, saveServer, refreshState } from "../../lib/store.svelte";
 
   let { server }: { server: ServerEntry } = $props();
 
@@ -73,6 +73,40 @@
     }
   }
 
+  // ---------- обновление ядра
+  let coreBuilds = $state<{ id: string; label: string; stable: boolean }[] | null>(null);
+  let coreBuild = $state("");
+  let coreBusy = $state(false);
+  const running = $derived(!["stopped", "crashed"].includes(status(server.id).status));
+  const canUpdate = $derived(DOWNLOADABLE.includes(s.core) && !!s.mc_version);
+
+  async function loadCoreBuilds() {
+    try {
+      coreBuilds = await api.coreBuilds(s.core, s.mc_version);
+      coreBuild = "";
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function updateCore() {
+    coreBusy = true;
+    app.createLog = [];
+    app.createProgress = null;
+    try {
+      const srv = await api.updateCore(server.id, coreBuild);
+      s.loader_version = srv.loader_version;
+      s.launch.jar_override = srv.launch.jar_override;
+      await refreshState();
+      toast(`${t("core.done")}: ${CORE_LABEL[srv.core]} ${srv.loader_version}`, "ok");
+      loadPreview();
+    } catch (e) {
+      fail(e);
+    } finally {
+      coreBusy = false;
+    }
+  }
+
   const CORES: CoreKind[] = ["vanilla", "paper", "purpur", "folia", "spigot", "fabric", "quilt", "forge", "neoforge", "youer", "mohist", "arclight"];
   const memGb = $derived((s.launch.memory_mb / 1024).toFixed(1));
 </script>
@@ -97,6 +131,31 @@
       <span class="grow"></span>
       <button type="button" class="btn sm" onclick={redetect}><Icon name="search" size={14} />{t("ln.redetect")}</button>
     </div>
+  </section>
+
+  <section class="panel">
+    <h3>{t("core.title")}</h3>
+    <div class="row wrap">
+      <span>{t("core.current", { v: `${CORE_LABEL[s.core]} ${s.loader_version || ""} · Minecraft ${s.mc_version || "?"}` })}</span>
+      <span class="grow"></span>
+      {#if !canUpdate}
+        <span class="muted small">{t("core.unsupported")}</span>
+      {:else if coreBuilds === null}
+        <button type="button" class="btn sm" onclick={loadCoreBuilds}>{t("core.load")}</button>
+      {:else}
+        <select bind:value={coreBuild} style="width:auto" disabled={coreBusy}>
+          <option value="">{t("new.latest")}</option>
+          {#each coreBuilds.slice(0, 50) as b}<option value={b.id}>{b.label}{b.stable ? "" : " ⚠"}</option>{/each}
+        </select>
+        <button type="button" class="btn sm primary" disabled={coreBusy || running} onclick={updateCore} title={running ? t("core.stopFirst") : ""}>
+          <Icon name="download" size={14} />{coreBusy ? t("core.updating") : t("core.update")}
+        </button>
+      {/if}
+    </div>
+    {#if canUpdate}<p class="muted small" style="margin:0">{running ? t("core.stopFirst") : t("core.note")}</p>{/if}
+    {#if coreBusy}
+      <div class="corelog mono">{#each app.createLog.slice(-6) as l}<div>{l}</div>{/each}</div>
+    {/if}
   </section>
 
   <section class="panel">
@@ -219,5 +278,8 @@
   }
   .preview code.bad { color: var(--err); }
   .actions { display: flex; gap: 10px; }
+  .small { font-size: 0.88em; }
+  .corelog { padding: 8px 10px; background: var(--console); border: 1px solid var(--line); border-radius: 8px; font-size: 0.78em; }
+  .corelog div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   input[type="range"] { accent-color: var(--accent); height: auto; padding: 0; border: 0; background: none; }
 </style>

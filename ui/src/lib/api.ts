@@ -72,6 +72,8 @@ export interface Config {
   console_lines: number;
   check_updates: boolean;
   update_repo: string;
+  curseforge_key: string;
+  servers_root: string;
   selected: string;
   servers: ServerEntry[];
 }
@@ -199,7 +201,7 @@ export interface BackupEvent {
 
 export const api = {
   state: () => invoke<AppSnapshot>("get_state"),
-  saveSettings: (settings: Pick<Config, "language" | "theme" | "close_to_tray" | "console_lines" | "check_updates">) =>
+  saveSettings: (settings: Pick<Config, "language" | "theme" | "close_to_tray" | "console_lines" | "check_updates" | "curseforge_key" | "servers_root">) =>
     invoke<void>("save_settings", { settings }),
   branding: () => invoke<{ logo: string | null; splash: string | null }>("get_branding"),
 
@@ -244,6 +246,22 @@ export const api = {
   saveCompressed: (id: string, text: string) => invoke<string>("save_compressed", { id, text }),
   quarantine: (id: string, file: string, reason: string) => invoke<void>("quarantine_mod", { id, file, reason }),
 
+  coreVersions: (core: CoreKind) => invoke<{ id: string; stable: boolean }[]>("core_versions", { core }),
+  coreBuilds: (core: CoreKind, mc: string) => invoke<{ id: string; label: string; stable: boolean }[]>("core_builds", { core, mc }),
+  createServer: (req: NewServer) => invoke<ServerEntry>("create_server", { req }),
+  updateCore: (id: string, build: string) => invoke<ServerEntry>("update_core", { id, build }),
+  javaCheck: (java: string) => invoke<string>("java_check", { java }),
+
+  catSearch: (id: string, kind: Kind, source: Source, query: string, sort: string, offset: number) =>
+    invoke<{ items: Project[]; total: number }>("catalog_search", { id, kind, source, query, sort, offset }),
+  catVersions: (id: string, kind: Kind, source: Source, project: string) =>
+    invoke<FileRef[]>("catalog_versions", { id, kind, source, project }),
+  catPlan: (id: string, kind: Kind, source: Source, project: string, version?: string) =>
+    invoke<Plan>("catalog_plan", { id, kind, source, project, version: version ?? null }),
+  catApply: (id: string, kind: Kind, plan: Plan) => invoke<string[]>("catalog_apply", { id, kind, plan }),
+  catUpdates: (id: string, kind: Kind) => invoke<UpdatesReport>("catalog_updates", { id, kind }),
+  catFix: (id: string, modId: string, range: string) => invoke<Plan>("catalog_fix", { id, modId, range }),
+
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
 };
@@ -283,6 +301,7 @@ export const supportsPlugins = (c: CoreKind) =>
 
 export interface Culprit { file: string; name: string; id: string; confidence: "low" | "medium" | "high"; client_only: boolean; enabled: boolean }
 export interface Finding {
+  fix: { mod_id: string; range: string } | null;
   code: string;
   severity: "info" | "warn" | "error";
   title: string;
@@ -301,4 +320,62 @@ export interface Analysis {
   errors: number;
   warnings: number;
   lag_warnings: number;
+}
+
+export type Kind = "mod" | "plugin";
+export type Source = "modrinth" | "hangar" | "curseforge";
+
+export interface NewServer {
+  name: string;
+  dir: string;
+  core: CoreKind;
+  mc: string;
+  build: string;
+  memory_mb: number;
+  java_path: string;
+  accept_eula: boolean;
+}
+
+export interface Project {
+  source: Source;
+  id: string;
+  slug: string;
+  title: string;
+  author: string;
+  description: string;
+  icon_url: string;
+  downloads: number;
+  url: string;
+  server_side: string;
+  installed: boolean;
+}
+
+export interface FileRef {
+  source: Source;
+  project_id: string;
+  version_id: string;
+  version_name: string;
+  version_number: string;
+  file_name: string;
+  url: string;
+  sha1: string | null;
+  size: number;
+  date: string;
+  channel: string;
+  deps: { project_id: string; required: boolean; name: string }[];
+  incompatible: string[];
+  page_url: string;
+}
+
+export interface PlanItem { title: string; icon_url: string; file: FileRef; reason: "selected" | "dependency" | "update" | "fix"; replaces: string | null }
+export interface Plan { items: PlanItem[]; already: string[]; warnings: string[] }
+export interface UpdateItem { file: string; title: string; icon_url: string; current: string; latest: FileRef; prerelease: boolean }
+export interface UpdatesReport { updates: UpdateItem[]; unknown: string[]; checked: number }
+
+export const DOWNLOADABLE: CoreKind[] = ["paper", "purpur", "folia", "fabric", "neoforge", "forge", "youer", "mohist", "arclight", "vanilla"];
+
+export function compact(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return String(n);
 }

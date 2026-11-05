@@ -20,6 +20,7 @@ ureq = { version = "2", default-features = false, features = ["tls", "native-cer
 rand = "0.8"
 thiserror = "2"
 log = "0.4"
+sha1_smol = { version = "1", features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"

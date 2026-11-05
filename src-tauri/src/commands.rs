@@ -75,6 +75,10 @@ pub struct AppSettings {
     close_to_tray: bool,
     console_lines: usize,
     check_updates: bool,
+    #[serde(default)]
+    curseforge_key: String,
+    #[serde(default)]
+    servers_root: String,
 }
 
 #[tauri::command]
@@ -86,6 +90,8 @@ pub fn save_settings(state: State<AppState>, settings: AppSettings) -> R<()> {
         c.close_to_tray = settings.close_to_tray;
         c.console_lines = settings.console_lines.clamp(500, 50_000);
         c.check_updates = settings.check_updates;
+        c.curseforge_key = settings.curseforge_key.trim().to_string();
+        c.servers_root = settings.servers_root.trim().to_string();
     }
     state.save()
 }
@@ -706,6 +712,251 @@ pub async fn quarantine_mod(app: AppHandle, id: String, file: String, reason: St
         let state = app.state::<AppState>();
         let s = server_of(&state, &id)?;
         mods::set_enabled(&s.dir(), &file, false, "crash", &reason).map(|_| ()).map_err(e)
+    })
+    .await
+}
+
+// ===================================================================== ядра и новые серверы
+
+use pcm_core::catalog::{self, Kind, Plan, Source};
+use pcm_core::cores;
+use pcm_core::detect::CoreKind;
+
+#[tauri::command]
+pub async fn core_versions(core: CoreKind) -> R<Vec<cores::McVersion>> {
+    bg(move || cores::mc_versions(core).map_err(e)).await
+}
+
+#[tauri::command]
+pub async fn core_builds(core: CoreKind, mc: String) -> R<Vec<cores::Build>> {
+    bg(move || cores::builds(core, &mc).map_err(e)).await
+}
+
+#[derive(Clone, Serialize)]
+struct CreateEvent {
+    /// id сервера, если это обновление ядра; "new" — мастер нового сервера
+    id: String,
+    line: Option<String>,
+    done: u64,
+    total: u64,
+}
+
+fn create_emitter(app: &AppHandle, id: &str) -> (impl FnMut(String), impl FnMut(u64, u64)) {
+    let (a1, a2) = (app.clone(), app.clone());
+    let (i1, i2) = (id.to_string(), id.to_string());
+    let mut last = std::time::Instant::now();
+    (
+        move |line: String| {
+            let _ = a1.emit("pcm://create", CreateEvent { id: i1.clone(), line: Some(line), done: 0, total: 0 });
+        },
+        move |done: u64, total: u64| {
+            if last.elapsed() > Duration::from_millis(200) || done == total {
+                last = std::time::Instant::now();
+                let _ = a2.emit("pcm://create", CreateEvent { id: i2.clone(), line: None, done, total });
+            }
+        },
+    )
+}
+
+#[derive(Deserialize)]
+pub struct NewServer {
+    name: String,
+    dir: String,
+    core: CoreKind,
+    mc: String,
+    build: String,
+    memory_mb: u32,
+    java_path: String,
+    accept_eula: bool,
+}
+
+#[tauri::command]
+pub async fn create_server(app: AppHandle, req: NewServer) -> R<ServerEntry> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let dir = PathBuf::from(req.dir.trim());
+        if dir.as_os_str().is_empty() {
+            return Err("не указана папка".into());
+        }
+        if dir.is_dir() && std::fs::read_dir(&dir).map(|mut d| d.next().is_some()).unwrap_or(false) {
+            return Err("папка не пустая — выбери новую или пустую папку".into());
+        }
+        let java = if req.java_path.trim().is_empty() { "java".to_string() } else { req.java_path.trim().to_string() };
+        let (mut log, progress) = create_emitter(&app, "new");
+        log(format!("📁 {}", dir.display()));
+        let res = cores::install(req.core, &req.mc, &req.build, &dir, &java, &mut log, progress).map_err(e)?;
+        cores::write_defaults(&dir, req.core, req.accept_eula, &req.name).map_err(e)?;
+        log("✔ Ядро установлено".into());
+
+        let d = detect::detect(&dir);
+        let mut s = ServerEntry {
+            id: util::short_id(),
+            name: if req.name.trim().is_empty() { util::file_name(&dir) } else { req.name.trim().to_string() },
+            path: dir.to_string_lossy().to_string(),
+            ..Default::default()
+        };
+        s.backup.password = util::random_password();
+        apply_detection(&mut s, &d);
+        if s.core == CoreKind::Unknown {
+            s.core = req.core;
+        }
+        if s.mc_version.is_empty() {
+            s.mc_version = req.mc.clone();
+        }
+        if s.loader_version.is_empty() && req.core != CoreKind::Vanilla {
+            s.loader_version = res.build.clone();
+        }
+        s.launch.memory_mb = req.memory_mb.max(1024);
+        s.launch.java_path = req.java_path.trim().to_string();
+        if let (Some(j), detect::LaunchTarget::None) = (&res.jar, &d.target) {
+            s.launch.jar_override = j.clone();
+        }
+        {
+            let mut c = state.config.lock().unwrap();
+            c.selected = s.id.clone();
+            c.servers.push(s.clone());
+        }
+        state.save()?;
+        Ok(s)
+    })
+    .await
+}
+
+/// Обновить ядро существующего сервера (сервер должен быть остановлен).
+#[tauri::command]
+pub async fn update_core(app: AppHandle, id: String, build: String) -> R<ServerEntry> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let _g = BusyGuard::acquire(&state, &id)?;
+        if state.pm.is_running(&id) {
+            return Err("сначала останови сервер".into());
+        }
+        let s = server_of(&state, &id)?;
+        let (mut log, progress) = create_emitter(&app, &id);
+        if backup::find_restic(&state.paths).is_some() {
+            log("💾 Снапшот перед обновлением ядра…".into());
+            snapshot_with_events(&app, &s, "pre-core-update")?;
+        }
+        let moved = cores::archive_old_core_jars(&s.dir(), s.core).map_err(e)?;
+        for m in &moved {
+            log(format!("↪ {} → cores_old", util::file_name(m)));
+        }
+        let java = if s.launch.java_path.trim().is_empty() { "java".to_string() } else { s.launch.java_path.clone() };
+        let res = cores::install(s.core, &s.mc_version, &build, &s.dir(), &java, &mut log, progress).map_err(e)?;
+        let mut s2 = s.clone();
+        let d = detect::detect(&s2.dir());
+        apply_detection(&mut s2, &d);
+        s2.loader_version = if d.loader_version.is_empty() { res.build.clone() } else { d.loader_version.clone() };
+        if !s2.launch.jar_override.is_empty() {
+            s2.launch.jar_override = res.jar.clone().unwrap_or_default();
+        }
+        {
+            let mut c = state.config.lock().unwrap();
+            if let Some(x) = c.server_mut(&id) {
+                *x = s2.clone();
+            }
+        }
+        state.save()?;
+        state.pm.system(&id, format!("⬆ Ядро обновлено: {} {}", s2.core.label(), s2.loader_version));
+        log("✔ Готово".into());
+        Ok(s2)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn java_check(java: String) -> R<String> {
+    bg(move || cores::java_version(if java.trim().is_empty() { "java" } else { java.trim() }).map_err(e)).await
+}
+
+// ===================================================================== каталог
+
+fn target(state: &AppState, id: &str, kind: Kind) -> R<catalog::Target> {
+    let s = server_of(state, id)?;
+    let key = state.config.lock().unwrap().curseforge_key.clone();
+    Ok(catalog::Target::for_server(&s, kind, &key))
+}
+
+#[tauri::command]
+pub async fn catalog_search(app: AppHandle, id: String, kind: Kind, source: Source, query: String, sort: String, offset: u32) -> R<catalog::SearchResult> {
+    bg(move || {
+        let t = target(&app.state::<AppState>(), &id, kind)?;
+        catalog::search(&t, source, &query, &sort, offset).map_err(e)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn catalog_versions(app: AppHandle, id: String, kind: Kind, source: Source, project: String) -> R<Vec<catalog::FileRef>> {
+    bg(move || {
+        let t = target(&app.state::<AppState>(), &id, kind)?;
+        catalog::versions(&t, source, &project).map_err(e)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn catalog_plan(app: AppHandle, id: String, kind: Kind, source: Source, project: String, version: Option<String>) -> R<Plan> {
+    bg(move || {
+        let t = target(&app.state::<AppState>(), &id, kind)?;
+        catalog::plan_install(&t, source, &project, version.as_deref()).map_err(e)
+    })
+    .await
+}
+
+#[derive(Clone, Serialize)]
+struct CatalogEvent {
+    id: String,
+    title: String,
+    done: u64,
+    total: u64,
+}
+
+#[tauri::command]
+pub async fn catalog_apply(app: AppHandle, id: String, kind: Kind, plan: Plan) -> R<Vec<String>> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let t = target(&state, &id, kind)?;
+        let mut last = std::time::Instant::now();
+        let files = catalog::apply(&t, &plan, |title, done, total| {
+            if last.elapsed() > Duration::from_millis(200) || done == total {
+                last = std::time::Instant::now();
+                let _ = app.emit("pcm://catalog", CatalogEvent { id: id.clone(), title: title.into(), done, total });
+            }
+        })
+        .map_err(e)?;
+        for f in &files {
+            state.pm.system(&id, format!("⬇ Установлено: {f}"));
+        }
+        Ok(files)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn catalog_updates(app: AppHandle, id: String, kind: Kind) -> R<catalog::UpdatesReport> {
+    bg(move || {
+        let t = target(&app.state::<AppState>(), &id, kind)?;
+        catalog::check_updates(&t).map_err(e)
+    })
+    .await
+}
+
+/// «Скачать подходящую версию» для ошибки «не та версия» / «нет мода».
+#[tauri::command]
+pub async fn catalog_fix(app: AppHandle, id: String, mod_id: String, range: String) -> R<Plan> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        let t = target(&state, &id, Kind::Mod)?;
+        // файл, который сейчас стоит под этим id (его заменим)
+        let report = mods::list(&s.dir(), s.core.mod_loader(), &s.mods);
+        let old = report
+            .mods
+            .iter()
+            .find(|m| m.enabled && m.meta.ids.iter().any(|x| x.eq_ignore_ascii_case(&mod_id)));
+        let range = if range.trim().is_empty() { "*".to_string() } else { range };
+        catalog::plan_fix_version(&t, &mod_id, &range, old.map(|m| m.file.as_str()), old.map(|m| m.meta.name.as_str())).map_err(e)
     })
     .await
 }

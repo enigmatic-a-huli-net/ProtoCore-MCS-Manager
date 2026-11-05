@@ -12,6 +12,8 @@
   let tray = $state(c.close_to_tray);
   let lines = $state(c.console_lines);
   let checkUpdates = $state(c.check_updates ?? true);
+  let cfKey = $state(c.curseforge_key ?? "");
+  let serversRoot = $state(c.servers_root ?? "");
 
   // предпросмотр темы сразу, без сохранения
   $effect(() => applyTheme($state.snapshot(theme) as Theme));
@@ -22,7 +24,7 @@
 
   async function save() {
     try {
-      const settings = { language: lang, theme: $state.snapshot(theme) as Theme, close_to_tray: tray, console_lines: Number(lines), check_updates: checkUpdates };
+      const settings = { language: lang, theme: $state.snapshot(theme) as Theme, close_to_tray: tray, console_lines: Number(lines), check_updates: checkUpdates, curseforge_key: cfKey, servers_root: serversRoot };
       await api.saveSettings(settings);
       Object.assign(app.config!, settings);
       toast(t("set.saved"), "ok");
@@ -118,6 +120,11 @@
   <section class="panel">
     <label class="check"><input type="checkbox" bind:checked={tray} />{t("set.tray")}</label>
     <label class="check"><input type="checkbox" bind:checked={checkUpdates} />{t("up.auto")}</label>
+    <div class="grid">
+      <label class="field"><span>{t("set.serversRoot")}</span><input bind:value={serversRoot} placeholder="D:\\Minecraft" /></label>
+      <label class="field"><span>{t("set.cfKey")}</span><input type="password" bind:value={cfKey} autocomplete="off" /></label>
+    </div>
+    <p class="muted small">{t("set.cfKeyHint")}</p>
     <label class="field narrow"><span>{t("set.lines")}</span><input type="number" min="500" max="50000" step="500" bind:value={lines} /></label>
   </section>
 

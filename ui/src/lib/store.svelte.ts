@@ -1,5 +1,5 @@
 // Общее состояние интерфейса (Svelte 5 runes).
-import { api, on, type UpdateInfo, type AppSnapshot, type BackupEvent, type Config, type LogLine, type ServerEntry, type StatusInfo } from "./api";
+import { api, on, type Kind, type Plan, type UpdateInfo, type AppSnapshot, type BackupEvent, type Config, type LogLine, type ServerEntry, type StatusInfo } from "./api";
 import { translate, type Key } from "./i18n";
 import { applyTheme } from "./theme";
 
@@ -24,6 +24,11 @@ export const app = $state({
   update: null as UpdateInfo | null,
   updateOpen: false,
   updateProgress: null as { done: number; total: number } | null,
+  /** открытый диалог установки */
+  plan: null as { id: string; kind: Kind; plan: Plan; onDone?: () => void } | null,
+  catalogProgress: null as { title: string; done: number; total: number } | null,
+  createLog: [] as string[],
+  createProgress: null as { done: number; total: number } | null,
 });
 
 // Логи держим «сырыми» (без глубокой реактивности) — их тысячи строк.
@@ -102,6 +107,11 @@ export async function init() {
   await on<{ id: string; mods: { name: string }[] }>("pcm://quarantine", ({ id, mods }) => {
     const s = app.config?.servers.find((x) => x.id === id);
     toast(`${s?.name ?? ""}: ${t("dg.qEvent", { list: mods.map((m) => m.name).join(", ") })}`, "info");
+  });
+  await on<{ id: string; title: string; done: number; total: number }>("pcm://catalog", (p) => (app.catalogProgress = p));
+  await on<{ id: string; line: string | null; done: number; total: number }>("pcm://create", (p) => {
+    if (p.line) app.createLog = [...app.createLog.slice(-200), p.line];
+    else app.createProgress = { done: p.done, total: p.total };
   });
   await on<{ done: number; total: number }>("pcm://update", (p) => (app.updateProgress = p));
   app.ready = true;

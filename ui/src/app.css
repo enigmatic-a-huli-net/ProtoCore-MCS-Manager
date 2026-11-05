@@ -223,6 +223,7 @@ input[type="color"] { width: 2.35em; height: 2.35em; padding: 2px; border: 1px s
   box-shadow: 0 24px 60px rgb(0 0 0 / 0.35);
   animation: pop calc(0.22s * var(--anim-k)) ease-out;
 }
+.modal > * { min-width: 0; }
 .modal .actions { display: flex; justify-content: flex-end; gap: 8px; }
 @keyframes fade { from { opacity: 0; } }
 @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(0.98); } }

@@ -18,11 +18,14 @@
 
 pub mod analyze;
 pub mod backup;
+pub mod catalog;
 pub mod config;
+pub mod cores;
 pub mod detect;
 pub mod error;
 pub mod launch;
 pub mod mods;
+pub mod net;
 pub mod plugins;
 pub mod process;
 pub mod props;

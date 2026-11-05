@@ -64,6 +64,15 @@ pub struct Finding {
     pub culprits: Vec<Culprit>,
     /// Сколько раз встретилось
     pub count: usize,
+    /// Что можно скачать, чтобы исправить (нет мода / не та версия)
+    pub fix: Option<FixHint>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FixHint {
+    pub mod_id: String,
+    /// требуемый диапазон версий (пусто — любая)
+    pub range: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,6 +224,7 @@ fn finding(code: &str, sev: Severity, title: String, detail: String, hint: &str,
         line: line.chars().take(400).collect(),
         culprits: vec![],
         count: 1,
+        fix: None,
     }
 }
 
@@ -327,6 +337,9 @@ pub fn analyze_text(text: &str, idx: &ModIndex) -> Vec<Finding> {
                     line,
                 )
             });
+            if let Some(f) = b.map.get_mut(&key) {
+                f.fix = Some(FixHint { mod_id: dep.clone(), range: range.clone() });
+            }
             // главный виновник — сама зависимость не той версии, второй — тот, кто её требует
             if let Some(m) = b.idx.find(&dep) {
                 b.add_culprit(&key, culprit(m, Confidence::High));
@@ -340,6 +353,7 @@ pub fn analyze_text(text: &str, idx: &ModIndex) -> Vec<Finding> {
         // --- отсутствующие зависимости
         if let Some(c) = r_neo_missing().captures(line) {
             let (dep, by) = (c[1].to_string(), c[2].to_string());
+            let range = c.get(3).map(|x| x.as_str().to_string()).unwrap_or_default();
             let key = format!("missing:{dep}");
             b.add(key.clone(), || {
                 finding(
@@ -351,6 +365,9 @@ pub fn analyze_text(text: &str, idx: &ModIndex) -> Vec<Finding> {
                     line,
                 )
             });
+            if let Some(f) = b.map.get_mut(&key) {
+                f.fix = Some(FixHint { mod_id: dep.clone(), range: range.clone() });
+            }
             if let Some(m) = b.idx.find(&by) {
                 b.add_culprit(&key, culprit(m, Confidence::Medium));
             }

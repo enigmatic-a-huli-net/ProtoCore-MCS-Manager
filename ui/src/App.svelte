@@ -12,6 +12,7 @@
   import EulaDialog from "./components/EulaDialog.svelte";
   import Toasts from "./components/Toasts.svelte";
   import UpdateDialog from "./components/UpdateDialog.svelte";
+  import PlanDialog from "./components/PlanDialog.svelte";
 
   let splashDone = $state(false);
 
@@ -55,6 +56,7 @@
 {#if app.addOpen}<AddServer />{/if}
 {#if app.eulaFor}<EulaDialog />{/if}
 {#if app.updateOpen}<UpdateDialog />{/if}
+{#if app.plan}<PlanDialog />{/if}
 <Toasts />
 
 <style>
