@@ -36,7 +36,7 @@
     return report.mods.filter((m) => {
       if (filter === "enabled" && !m.enabled) return false;
       if (filter === "disabled" && m.enabled) return false;
-      if (filter === "problems" && !m.problems.length && !m.missing_deps.length) return false;
+      if (filter === "problems" && !m.problems.length && !m.missing_deps.length && !m.wrong_deps?.length) return false;
       if (filter === "client" && m.client === "no") return false;
       if (!f) return true;
       return m.name.toLowerCase().includes(f) || m.file.toLowerCase().includes(f) || m.ids.some((i) => i.includes(f));
@@ -132,7 +132,7 @@
       </button>
     </div>
 
-    {#if report && (report.missing.length || report.conflicts.length)}
+    {#if report && (report.missing.length || report.conflicts.length || report.wrong_versions?.length)}
       <div class="alerts">
         {#if report.missing.length}
           <div class="alert err">
@@ -147,6 +147,20 @@
                       {t("mods.enableIt")} {d.disabled_file}
                     </button>
                   {/if}
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+        {#if report.wrong_versions?.length}
+          <div class="alert err">
+            <h3><Icon name="alert" size={15} />{t("mods.wrongVer")} · {report.wrong_versions.length}</h3>
+            <ul>
+              {#each report.wrong_versions as w}
+                <li>
+                  <b>{report.mods.find((m) => m.file === w.file)?.name ?? w.id}</b>
+                  <span class="muted">{t("mods.wrongVerRow", { have: w.have, need: w.need_human, by: w.needed_by })}</span>
+                  <span class="muted mono small">{w.file}</span>
                 </li>
               {/each}
             </ul>
@@ -201,6 +215,7 @@
                   {#if m.client === "definite"}<span class="chip warn">{t("mods.clientDefinite")}</span>
                   {:else if m.client === "likely"}<span class="chip">{t("mods.clientLikely")}</span>{/if}
                   {#if m.enabled && m.missing_deps.length}<span class="chip err">−{m.missing_deps.join(", ")}</span>{/if}
+                  {#each m.enabled ? (m.wrong_deps ?? []) : [] as id}<span class="chip err">{t("mods.wrongChip", { id })}</span>{/each}
                   {#if m.enabled && m.problems.some((p) => p.includes("конфликт"))}<span class="chip err">{t("mods.conflicts")}</span>{/if}
                   <span class="file">{m.file}</span>
                 </span>
@@ -221,7 +236,7 @@
                   <dt>{t("mods.requires")}</dt>
                   <dd class="deps">
                     {#each m.deps as d}
-                      <span class="chip {m.missing_deps.includes(d.id) ? 'err' : ''}">
+                      <span class="chip {m.missing_deps.includes(d.id) || m.wrong_deps?.includes(d.id) ? 'err' : ''}" title={d.version}>
                         {d.id}{d.required ? "" : ` (${t("mods.optional")})`}
                       </span>
                     {/each}

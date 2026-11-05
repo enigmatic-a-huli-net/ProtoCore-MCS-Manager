@@ -137,8 +137,11 @@ export interface ModInfo {
   disabled_detail: string | null;
   required_by: string[];
   missing_deps: string[];
+  wrong_deps: string[];
   problems: string[];
 }
+
+export interface WrongVersion { id: string; file: string; have: string; need: string; need_human: string; needed_by: string; needed_by_file: string }
 
 export interface MissingDep { id: string; needed_by: string[]; disabled_file: string | null }
 export interface Conflict { kind: "definite" | "possible"; a: string; b: string; reason: string }
@@ -146,6 +149,7 @@ export interface Conflict { kind: "definite" | "possible"; a: string; b: string;
 export interface ModReport {
   mods: ModInfo[];
   missing: MissingDep[];
+  wrong_versions: WrongVersion[];
   conflicts: Conflict[];
   enabled_count: number;
   disabled_count: number;

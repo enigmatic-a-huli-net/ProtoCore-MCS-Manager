@@ -109,7 +109,9 @@
                     {#if c.client_only}<span class="chip accent">{t("dg.client")}</span>{/if}
                     <span class="mono muted small">{c.file}</span>
                     <span class="grow"></span>
-                    {#if c.enabled && !done[c.file]}
+                    {#if f.code === "wrong_version" || f.code === "missing_dep"}
+                      <!-- карантин тут не поможет: нужна другая версия / недостающий мод -->
+                    {:else if c.enabled && !done[c.file]}
                       <button class="btn sm" onclick={() => quarantine(c, f.title)}>
                         <Icon name="shield" size={13} />{t("dg.quarantine")}
                       </button>

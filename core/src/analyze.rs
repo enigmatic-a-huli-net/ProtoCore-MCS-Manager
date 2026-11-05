@@ -159,7 +159,8 @@ rx!(r_invalid_dist, r"(?i)for invalid (?:dist|side) DEDICATED_SERVER");
 rx!(r_mixin_mod, r"(?i)Mixin apply (?:for mod|failed) ([\w\-.]+?)(?:\.mixins?\.json|\s|:|$)");
 rx!(r_mixin_cfg, r"(?i)(?:from mod|mixin config|config) ([\w\-]+)\.mixins?\.json");
 rx!(r_fabric_requires, r"Mod '([^']+)' \(([\w\-]+)\) [\w.+\-]+ requires (?:version [^ ]+ of |any version of )?(?:mod )?'?([^'(,]+)'?\s*(?:\(([\w\-]+)\))?");
-rx!(r_neo_missing, r"(?i)Mod ID: '([\w\-]+)', Requested by: '([\w\-]+)'");
+rx!(r_neo_missing, r"(?i)Mod ID: '([\w\-]+)', Requested by: '([\w\-]+)'(?:, Expected range: '([^']*)')?(?:, Actual version: '([^']*)')?");
+rx!(r_fabric_wrong, r"Mod '([^']+)' \(([\w\-]+)\) [\w.+\-]+ requires (?:version )?([^ ]+) of (?:mod )?'([^']+)' \(([\w\-]+)\), but only the wrong version is present: ([\w.+\-]+)");
 rx!(r_forge_requires, r"(?i)Mod (\w+) requires (\w+) ([^\s]+)");
 rx!(r_incompatible, r"(?i)(?:Mod|Incompatible mod set!?)\s*'?([\w\-]+)'? (?:is incompatible with|breaks) '?([\w\-]+)'?");
 rx!(r_duplicate, r"(?i)(?:Found duplicate mods|duplicate mods? found|Found \d+ duplicate mods?|Duplicate mods found)");
@@ -290,6 +291,48 @@ pub fn analyze_text(text: &str, idx: &ModIndex) -> Vec<Finding> {
             });
             if let Some(m) = b.idx.find(&id) {
                 b.add_culprit(&key, culprit(m, Confidence::High));
+            }
+            continue;
+        }
+
+        // --- зависимость есть, но не той версии
+        let wrong = r_neo_missing()
+            .captures(line)
+            .and_then(|c| {
+                let actual = c.get(4)?.as_str();
+                (!actual.is_empty() && !actual.eq_ignore_ascii_case("[MISSING]")).then(|| {
+                    (c[1].to_string(), c[2].to_string(), c.get(3).map(|x| x.as_str()).unwrap_or("").to_string(), actual.to_string())
+                })
+            })
+            .or_else(|| {
+                r_fabric_wrong()
+                    .captures(line)
+                    .map(|c| (c[5].to_string(), c[2].to_string(), c[3].to_string(), c[6].to_string()))
+            });
+        if let Some((dep, by, range, actual)) = wrong {
+            let key = format!("version:{dep}:{by}");
+            let need = human_range(&range);
+            let label = |id: &str| match b.idx.find(id) {
+                Some(m) if !m.meta.name.is_empty() && m.meta.name.to_lowercase() != id.to_lowercase() => format!("{} ({id})", m.meta.name),
+                _ => id.to_string(),
+            };
+            let (dep_l, by_l) = (label(&dep), label(&by));
+            b.add(key.clone(), || {
+                finding(
+                    "wrong_version",
+                    Severity::Error,
+                    format!("Скачана не та версия мода «{dep_l}»: стоит {actual}, нужна {need}"),
+                    format!("Эту версию требует «{by_l}»."),
+                    "Скачай версию зависимости из нужного диапазона или подбери версию мода, который её требует, под уже установленную.",
+                    line,
+                )
+            });
+            // главный виновник — сама зависимость не той версии, второй — тот, кто её требует
+            if let Some(m) = b.idx.find(&dep) {
+                b.add_culprit(&key, culprit(m, Confidence::High));
+            }
+            if let Some(m) = b.idx.find(&by) {
+                b.add_culprit(&key, culprit(m, Confidence::Medium));
             }
             continue;
         }
@@ -570,6 +613,35 @@ pub fn analyze_text(text: &str, idx: &ModIndex) -> Vec<Finding> {
     out
 }
 
+/// «[1.3.0,1.4.0)» → «от 1.3.0 до 1.4.0 (не включая)».
+pub fn human_range(r: &str) -> String {
+    let r = r.trim();
+    if r.is_empty() || r == "*" || r == "[0,)" {
+        return "любая".into();
+    }
+    // Fabric: ">=1.3.0", "~1.3", "1.3.x"
+    if !r.starts_with('[') && !r.starts_with('(') {
+        return r.replace(">=", "от ").replace("<=", "до ").replace('<', "до ").replace('>', "больше ");
+    }
+    let open_incl = r.starts_with('[');
+    let close_incl = r.ends_with(']');
+    let inner = &r[1..r.len().saturating_sub(1)];
+    match inner.split_once(',') {
+        None => format!("ровно {inner}"),
+        Some((lo, hi)) => {
+            let (lo, hi) = (lo.trim(), hi.trim());
+            match (lo.is_empty(), hi.is_empty()) {
+                (false, true) => format!("от {lo}{}", if open_incl { "" } else { " (не включая)" }),
+                (true, false) => format!("до {hi}{}", if close_incl { " включительно" } else { " (не включая)" }),
+                _ => format!(
+                    "от {lo} до {hi}{}",
+                    if close_incl { " включительно" } else { " (не включая)" }
+                ),
+            }
+        }
+    }
+}
+
 fn first_mod_frame<'a>(lines: &[&str], from: usize, max: usize, idx: &ModIndex<'a>) -> Option<&'a ModInfo> {
     for l in lines.iter().skip(from).take(max) {
         if let Some(c) = r_frame().captures(l) {
@@ -596,7 +668,7 @@ pub fn compress(text: &str, header: &str) -> String {
     let mut out: Vec<String> = vec![header.to_string()];
     let mut seen: HashMap<String, usize> = HashMap::new(); // нормализованная строка → индекс в out
     let mut counts: HashMap<usize, usize> = HashMap::new();
-    let keep_info = re(r"(?i)(Starting minecraft server version|Loading Minecraft|ModLauncher running|Forge mod loading|NeoForge|Fabric Loader|Loading \d+ mods|Java is|Java version|java\.version|Operating System|Done \(|Stopping the server|Preparing level|Crash report saved|Suspected Mods|Description:|Time:|Minecraft Version|Memory:|JVM Flags|Is Modded)");
+    let keep_info = re(r"(?i)(Mod ID: |Requested by|requires |Missing or unsupported|Incompatible mod|is incompatible|Starting minecraft server version|Loading Minecraft|ModLauncher running|Forge mod loading|NeoForge|Fabric Loader|Loading \d+ mods|Java is|Java version|java\.version|Operating System|Done \(|Stopping the server|Preparing level|Crash report saved|Suspected Mods|Description:|Time:|Minecraft Version|Memory:|JVM Flags|Is Modded)");
     let ts = re(r"^\[[^\]]*\]\s*");
     let digits = re(r"\d+");
 
@@ -742,7 +814,7 @@ pub fn quarantine_candidates(findings: &[Finding], allow_content: bool, min: Con
     let mut out: Vec<(Culprit, String)> = Vec::new();
     for f in findings {
         // отсутствующую зависимость карантином не исправить
-        if f.code == "missing_dep" || f.code == "duplicate" || f.code == "eula" || f.code == "port" || f.code == "oom" || f.code == "java_version" {
+        if f.code == "missing_dep" || f.code == "wrong_version" || f.code == "duplicate" || f.code == "eula" || f.code == "port" || f.code == "oom" || f.code == "java_version" {
             continue;
         }
         for c in &f.culprits {
@@ -830,6 +902,7 @@ mod tests {
             disabled_detail: None,
             required_by: vec![],
             missing_deps: vec![],
+            wrong_deps: vec![],
             problems: vec![],
         }
     }
@@ -878,6 +951,28 @@ Suspected Mods: Create (create), Minecraft (minecraft)\n";
         assert!(q.iter().all(|(c, _)| c.file != "create.jar"));
         let q2 = quarantine_candidates(&f, true, Confidence::Medium);
         assert!(q2.iter().any(|(c, _)| c.file == "create.jar"));
+    }
+
+    #[test]
+    fn wrong_version_separate() {
+        let mut v = vec![
+            fake_mod("powergrid-mc1.21.1-0.6.2.jar", "powergrid", "org.pg", false),
+            fake_mod("tfmg-1.2.2.jar", "tfmg", "com.tfmg", false),
+        ];
+        let r = analyze_mods(&mut v, None);
+        let idx = ModIndex::new(Some(&r));
+        let log = "\tMod ID: 'tfmg', Requested by: 'powergrid', Expected range: '[1.3.0,1.4.0)', Actual version: '1.2.2'\n\
+\tMod ID: 'flywheel', Requested by: 'create', Expected range: '[1.0,)', Actual version: '[MISSING]'\n\
+Mod 'Foo' (foo) 1.0 requires version 2.0.0 of 'Bar Lib' (barlib), but only the wrong version is present: 1.5.0!\n";
+        let f = analyze_text(log, &idx);
+        let w = f.iter().find(|x| x.code == "wrong_version" && x.title.contains("tfmg")).unwrap();
+        assert!(w.title.contains("1.2.2") && w.title.contains("от 1.3.0 до 1.4.0 (не включая)"), "{}", w.title);
+        assert_eq!(w.culprits[0].file, "tfmg-1.2.2.jar");
+        assert!(f.iter().any(|x| x.code == "missing_dep" && x.title.contains("flywheel")));
+        assert!(f.iter().any(|x| x.code == "wrong_version" && x.title.contains("barlib") && x.title.contains("1.5.0")));
+        assert!(!f.iter().any(|x| x.code == "missing_dep" && x.title.contains("tfmg")));
+        assert!(quarantine_candidates(&f, true, Confidence::Low).is_empty());
+        assert_eq!(human_range("[21.1,)"), "от 21.1");
     }
 
     #[test]

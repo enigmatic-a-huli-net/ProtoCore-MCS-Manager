@@ -101,6 +101,9 @@ pub struct ModInfo {
     pub required_by: Vec<String>,
     /// Каких обязательных зависимостей не хватает
     pub missing_deps: Vec<String>,
+    /// Зависимости, установленные не той версии (id)
+    #[serde(default)]
+    pub wrong_deps: Vec<String>,
     /// Найденные проблемы (короткие строки)
     pub problems: Vec<String>,
 }
@@ -131,9 +134,28 @@ pub struct MissingDep {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct WrongVersion {
+    /// id зависимости
+    pub id: String,
+    /// файл, в котором она лежит
+    pub file: String,
+    /// установленная версия
+    pub have: String,
+    /// требуемый диапазон, как в метаданных
+    pub need: String,
+    /// он же человеческим языком
+    pub need_human: String,
+    /// кто требует
+    pub needed_by: String,
+    pub needed_by_file: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ModReport {
     pub mods: Vec<ModInfo>,
     pub missing: Vec<MissingDep>,
+    /// Зависимость установлена, но не той версии
+    pub wrong_versions: Vec<WrongVersion>,
     pub conflicts: Vec<Conflict>,
     pub enabled_count: usize,
     pub disabled_count: usize,
@@ -681,6 +703,7 @@ pub fn list(server_dir: &Path, server_loader: Option<ModLoader>, settings: &ModS
                 meta,
                 required_by: vec![],
                 missing_deps: vec![],
+                wrong_deps: vec![],
                 problems: vec![],
             });
         }
@@ -707,6 +730,10 @@ pub fn analyze(mods: &mut Vec<ModInfo>, server_loader: Option<ModLoader>) -> Mod
     let has_connector = available.contains_key("connector");
     let builtin: HashSet<&str> = BUILTIN_IDS.iter().copied().collect();
 
+    // версии установленных модов: файл → версия
+    let ver_of: HashMap<String, String> = mods.iter().map(|m| (m.file.clone(), m.meta.version.clone())).collect();
+    let mut wrong_versions: Vec<WrongVersion> = Vec::new();
+
     // отсутствующие зависимости
     let mut missing: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut required_by: HashMap<String, Vec<String>> = HashMap::new();
@@ -726,6 +753,25 @@ pub fn analyze(mods: &mut Vec<ModInfo>, server_loader: Option<ModLoader>) -> Mod
             }
             if let Some(file) = available.get(&did).or_else(|| available.get(&alias)) {
                 required_by.entry(file.clone()).or_default().push(name.clone());
+                let have = ver_of.get(file).cloned().unwrap_or_default();
+                if version_matches(&d.version, &have) == Some(false) {
+                    m.wrong_deps.push(d.id.clone());
+                    m.problems.push(format!(
+                        "нужна {} версии {}, а стоит {}",
+                        d.id,
+                        crate::analyze::human_range(&d.version),
+                        have
+                    ));
+                    wrong_versions.push(WrongVersion {
+                        id: d.id.clone(),
+                        file: file.clone(),
+                        have,
+                        need: d.version.clone(),
+                        need_human: crate::analyze::human_range(&d.version),
+                        needed_by: name.clone(),
+                        needed_by_file: m.file.clone(),
+                    });
+                }
             } else {
                 m.missing_deps.push(d.id.clone());
                 missing.entry(d.id.clone()).or_default().push(name.clone());
@@ -838,9 +884,121 @@ pub fn analyze(mods: &mut Vec<ModInfo>, server_loader: Option<ModLoader>) -> Mod
         disabled_count: mods.iter().filter(|m| !m.enabled).count(),
         client_count: mods.iter().filter(|m| m.meta.client != ClientConfidence::No).count(),
         missing,
+        wrong_versions,
         conflicts,
         mods: std::mem::take(mods),
     }
+}
+
+// ===================================================================== версии
+
+/// Числовая часть версии: «6.0.4-mc1.21.1» → [6, 0, 4]; «1.21.1» → [1, 21, 1].
+fn ver_nums(v: &str) -> Option<Vec<u64>> {
+    let v = v.trim().trim_start_matches(['v', 'V']);
+    let head: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    let nums: Vec<u64> = head.split('.').filter(|x| !x.is_empty()).filter_map(|x| x.parse().ok()).collect();
+    (!nums.is_empty()).then_some(nums)
+}
+
+fn cmp_nums(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
+    let n = a.len().max(b.len());
+    for i in 0..n {
+        let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+        match x.cmp(&y) {
+            std::cmp::Ordering::Equal => continue,
+            o => return o,
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// Подходит ли версия под требование.
+/// Понимает диапазоны Maven (Forge/NeoForge: `[1.3,1.4)`, `[21.1,)`, несколько через запятую)
+/// и Fabric (`>=1.2 <2`, `~1.3`, `^1.3`, `1.3.x`, `*`, варианты через `||`).
+/// `None` — версию не удалось разобрать (тогда не ругаемся).
+pub fn version_matches(req: &str, have: &str) -> Option<bool> {
+    let req = req.trim();
+    if req.is_empty() || req == "*" || have.contains('$') {
+        return Some(true);
+    }
+    let h = ver_nums(have)?;
+    use std::cmp::Ordering::*;
+
+    if req.starts_with('[') || req.starts_with('(') {
+        // Maven: один или несколько диапазонов «[a,b),[c,)»
+        let re = regex::Regex::new(r"[\[(]([^\])]*)[\])]").unwrap();
+        let mut any = false;
+        for m in re.find_iter(req) {
+            let s = m.as_str();
+            let (lo_inc, hi_inc) = (s.starts_with('['), s.ends_with(']'));
+            let inner = &s[1..s.len() - 1];
+            let ok = match inner.split_once(',') {
+                None => ver_nums(inner).map(|v| cmp_nums(&h, &v) == Equal)?,
+                Some((lo, hi)) => {
+                    let lo_ok = match ver_nums(lo) {
+                        None => true,
+                        Some(v) => matches!((cmp_nums(&h, &v), lo_inc), (Greater, _) | (Equal, true)),
+                    };
+                    let hi_ok = match ver_nums(hi) {
+                        None => true,
+                        Some(v) => matches!((cmp_nums(&h, &v), hi_inc), (Less, _) | (Equal, true)),
+                    };
+                    lo_ok && hi_ok
+                }
+            };
+            any |= ok;
+        }
+        return Some(any);
+    }
+
+    // Fabric / semver
+    let alt_ok = |alt: &str| -> Option<bool> {
+        for part in alt.split_whitespace() {
+            let (op, v) = if let Some(r) = part.strip_prefix(">=") { (">=", r) }
+                else if let Some(r) = part.strip_prefix("<=") { ("<=", r) }
+                else if let Some(r) = part.strip_prefix('>') { (">", r) }
+                else if let Some(r) = part.strip_prefix('<') { ("<", r) }
+                else if let Some(r) = part.strip_prefix('=') { ("=", r) }
+                else if let Some(r) = part.strip_prefix('~') { ("~", r) }
+                else if let Some(r) = part.strip_prefix('^') { ("^", r) }
+                else { ("=", part) };
+            if v == "*" {
+                continue;
+            }
+            // 1.3.x / 1.3.* — совпадение по префиксу
+            if v.contains(".x") || v.contains(".*") || v.contains(".X") {
+                let pre = ver_nums(v.split(['x', 'X', '*']).next().unwrap_or(""))?;
+                if h.len() < pre.len() || h[..pre.len()] != pre[..] {
+                    return Some(false);
+                }
+                continue;
+            }
+            let r = ver_nums(v)?;
+            let c = cmp_nums(&h, &r);
+            let ok = match op {
+                ">=" => c != Less,
+                "<=" => c != Greater,
+                ">" => c == Greater,
+                "<" => c == Less,
+                "~" => c != Less && h.first() == r.first() && (r.len() < 2 || h.get(1) == r.get(1)),
+                "^" => c != Less && h.first() == r.first(),
+                _ => c == Equal || (h.len() > r.len() && h[..r.len()] == r[..] && false),
+            };
+            if !ok {
+                return Some(false);
+            }
+        }
+        Some(true)
+    };
+    let mut parsed_any = false;
+    for alt in req.split("||") {
+        match alt_ok(alt.trim()) {
+            Some(true) => return Some(true),
+            Some(false) => parsed_any = true,
+            None => {}
+        }
+    }
+    if parsed_any { Some(false) } else { None }
 }
 
 // ===================================================================== операции
@@ -1011,6 +1169,37 @@ type="incompatible"
 
         set_enabled(t.path(), "c.jar", true, "", "").unwrap();
         assert!(mods.join("c.jar").exists());
+    }
+
+    #[test]
+    fn versions() {
+        assert_eq!(version_matches("[1.3.0,1.4.0)", "1.2.2"), Some(false));
+        assert_eq!(version_matches("[1.3.0,1.4.0)", "1.3.5"), Some(true));
+        assert_eq!(version_matches("[1.3.0,1.4.0)", "1.4.0"), Some(false));
+        assert_eq!(version_matches("[21.1,)", "21.1.77"), Some(true));
+        assert_eq!(version_matches("[6.0,)", "6.0.4-mc1.21.1"), Some(true));
+        assert_eq!(version_matches("[1.0,2.0),[3.0,)", "3.1"), Some(true));
+        assert_eq!(version_matches(">=0.15.0", "0.16.5"), Some(true));
+        assert_eq!(version_matches(">=2.0.0 <3", "1.5.0"), Some(false));
+        assert_eq!(version_matches("~1.3", "1.3.9"), Some(true));
+        assert_eq!(version_matches("~1.3", "1.4.0"), Some(false));
+        assert_eq!(version_matches("1.21.x", "1.21.1"), Some(true));
+        assert_eq!(version_matches("1.20.x || 1.21.x", "1.21.1"), Some(true));
+        assert_eq!(version_matches("*", "anything"), Some(true));
+        assert_eq!(version_matches("[1.0,)", "${file.jarVersion}"), Some(true));
+        assert_eq!(version_matches("[1.0,)", "beta"), None);
+    }
+
+    #[test]
+    fn report_wrong_version() {
+        let t = tempfile::tempdir().unwrap();
+        let mods = t.path().join("mods");
+        jar(&mods, "pg.jar", &[("META-INF/neoforge.mods.toml", b"[[mods]]\nmodId=\"powergrid\"\nversion=\"0.6.2\"\n[[dependencies.powergrid]]\nmodId=\"tfmg\"\ntype=\"required\"\nversionRange=\"[1.3.0,1.4.0)\"\nside=\"BOTH\"\n")]);
+        jar(&mods, "tfmg.jar", &[("META-INF/neoforge.mods.toml", b"[[mods]]\nmodId=\"tfmg\"\nversion=\"1.2.2\"\n")]);
+        let r = list(t.path(), Some(ModLoader::NeoForge), &ModSettings::default());
+        assert_eq!(r.wrong_versions.len(), 1);
+        assert_eq!(r.wrong_versions[0].have, "1.2.2");
+        assert!(r.missing.is_empty());
     }
 
     #[test]
