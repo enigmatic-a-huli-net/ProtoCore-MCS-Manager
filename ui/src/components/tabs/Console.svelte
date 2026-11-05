@@ -2,7 +2,7 @@
   import { tick } from "svelte";
   import Icon from "../Icon.svelte";
   import { api, type ServerEntry } from "../../lib/api";
-  import { getLog, logVersion, status, t, fail, clearLocalLog } from "../../lib/store.svelte";
+  import { app, getLog, logVersion, status, t, fail, clearLocalLog } from "../../lib/store.svelte";
 
   let { server }: { server: ServerEntry } = $props();
 
@@ -84,6 +84,14 @@
     <button class="btn ghost sm" onclick={clear}><Icon name="trash" size={14} />{t("con.clear")}</button>
   </div>
 
+  {#if status(server.id).status === "crashed"}
+    <div class="crash">
+      <Icon name="alert" size={16} />
+      <span class="grow">{t("dg.crashBanner")}</span>
+      <button class="btn sm" onclick={() => (app.tab = "diag")}>{t("dg.open")}</button>
+    </div>
+  {/if}
+
   <div class="console-body" bind:this={box} onscroll={onScroll}>
     {#each lines as l (l.seq)}
       <div class="ln {l.level}"><span class="ts">{time(l.ts)}</span>{l.text}</div>
@@ -111,6 +119,16 @@
   .search :global(svg) { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); }
   .search input { padding-left: 30px; height: 2.1em; }
 
+  .crash {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--err) 12%, transparent);
+    color: var(--err);
+    font-size: 0.92em;
+  }
   .console-body {
     flex: 1;
     min-height: 0;

@@ -165,6 +165,14 @@
         <label class="field"><span>{t("ln.extraClient")}</span><input bind:value={extraClient} placeholder="mymod, othermod" /></label>
         <label class="field"><span>{t("ln.neverDisable")}</span><input bind:value={never} placeholder="journeymap" /></label>
       </div>
+      <h3 class="sub">{t("ln.quarantine")}</h3>
+      <label class="check"><input type="checkbox" bind:checked={s.mods.auto_quarantine} />{t("ln.qAuto")}</label>
+      {#if s.mods.auto_quarantine}
+        <label class="check indent"><input type="checkbox" bind:checked={s.mods.quarantine_restart} />{t("ln.qRestart")}</label>
+        <label class="check indent"><input type="checkbox" bind:checked={s.mods.quarantine_content} />{t("ln.qContent")}</label>
+        {#if s.mods.quarantine_content}<p class="warnline indent">{t("ln.qContentWarn")}</p>{/if}
+        <label class="field indent narrow"><span>{t("ln.qRounds")}</span><input type="number" min="1" max="20" bind:value={s.mods.quarantine_max_rounds} /></label>
+      {/if}
     </section>
   {/if}
 
@@ -192,6 +200,9 @@
   .modes label.on { border-color: var(--accent); background: var(--accent-soft); }
   .modes input { accent-color: var(--accent); }
   .indent { padding-left: 1.7em; }
+  .sub { margin-top: 6px; }
+  .narrow { max-width: 14em; }
+  .warnline { margin: 0; color: var(--warn); font-size: 0.88em; max-width: 70ch; }
   .preview { display: grid; gap: 4px; }
   .preview span { font-size: 0.85em; color: var(--muted); }
   .preview code {

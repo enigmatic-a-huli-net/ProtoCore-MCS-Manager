@@ -101,7 +101,7 @@ pub fn status(paths: &AppPaths) -> ResticStatus {
 /// Скачивает последнюю версию restic с GitHub в tools/.
 pub fn download_restic(paths: &AppPaths) -> Result<PathBuf> {
     paths.ensure()?;
-    let rel: Value = ureq::get("https://api.github.com/repos/restic/restic/releases/latest")
+    let rel: Value = crate::util::http().get("https://api.github.com/repos/restic/restic/releases/latest")
         .set("User-Agent", "ProtoCore-MCS-Manager")
         .call()
         .map_err(|e| Error::Network(e.to_string()))?
@@ -135,7 +135,7 @@ pub fn download_restic(paths: &AppPaths) -> Result<PathBuf> {
         .to_string();
 
     let mut bytes = Vec::new();
-    ureq::get(&url)
+    crate::util::http().get(&url)
         .set("User-Agent", "ProtoCore-MCS-Manager")
         .call()
         .map_err(|e| Error::Network(e.to_string()))?

@@ -81,6 +81,9 @@ pub struct ModMeta {
     /// Возможно несовместим (conflicts / discouraged)
     pub conflicts: Vec<String>,
     pub homepage: String,
+    /// Основные Java-пакеты мода (com.simibubi.create …) — чтобы по стектрейсу понять, чей это код
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -253,6 +256,7 @@ fn empty_meta() -> ModMeta {
         breaks: vec![],
         conflicts: vec![],
         homepage: String::new(),
+        packages: vec![],
     }
 }
 
@@ -331,7 +335,34 @@ fn parse_archive<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, nested: bool) -> 
     if m.name.is_empty() {
         m.name = m.ids.first().cloned().unwrap_or_default();
     }
+    if nested {
+        m.packages = main_packages(zip);
+    }
     m
+}
+
+/// Самые «населённые» пакеты jar (до 3 уровней), без вложенных библиотек.
+fn main_packages<R: Read + Seek>(zip: &mut zip::ZipArchive<R>) -> Vec<String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for name in zip.file_names() {
+        if !name.ends_with(".class") || name.starts_with("META-INF/") {
+            continue;
+        }
+        let parts: Vec<&str> = name.split('/').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let depth = (parts.len() - 1).min(3);
+        *counts.entry(parts[..depth].join(".")).or_default() += 1;
+    }
+    let mut v: Vec<(String, usize)> = counts.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    let total: usize = v.iter().map(|x| x.1).sum();
+    v.into_iter()
+        .take(4)
+        .filter(|(_, c)| *c * 10 >= total.max(1)) // пакет — хотя бы 10% классов
+        .map(|(p, _)| p)
+        .collect()
 }
 
 fn nested_ids<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, inner_path: &str) -> Vec<String> {

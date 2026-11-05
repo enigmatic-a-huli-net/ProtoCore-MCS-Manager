@@ -35,7 +35,7 @@
     border: 2px solid transparent;
     border-top-color: var(--accent);
     border-right-color: var(--accent-line);
-    animation: spin 1.1s linear infinite;
+    animation: spin calc(2.2s * var(--anim-k)) linear infinite;
   }
   p { margin: 0; font-size: 0.9em; }
   @keyframes spin { to { transform: rotate(360deg); } }

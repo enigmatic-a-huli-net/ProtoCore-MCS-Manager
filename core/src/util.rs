@@ -34,6 +34,24 @@ pub fn move_file(src: &Path, dst_dir: &Path) -> Result<PathBuf> {
     Ok(dst)
 }
 
+/// HTTP-клиент с системными сертификатами (важно, если антивирус или прокси проверяет HTTPS).
+pub fn http() -> &'static ureq::Agent {
+    static A: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    A.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .user_agent(concat!("ProtoCore-MCS-Manager/", env!("CARGO_PKG_VERSION")))
+            .timeout_connect(std::time::Duration::from_secs(15))
+            .timeout_read(std::time::Duration::from_secs(60))
+            .try_proxy_from_env(true)
+            .build()
+    })
+}
+
+/// Метка времени для имён файлов: 2026-11-05_14-30-12
+pub fn stamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string()
+}
+
 /// Короткий случайный идентификатор (12 hex-символов).
 pub fn short_id() -> String {
     use rand::Rng;

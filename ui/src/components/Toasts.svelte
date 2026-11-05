@@ -25,7 +25,7 @@
     border-radius: var(--radius);
     box-shadow: 0 10px 30px rgb(0 0 0 / 0.25);
     font-size: 0.92em;
-    animation: slide 0.18s ease-out;
+    animation: slide calc(0.24s * var(--anim-k)) ease-out;
     white-space: pre-wrap;
     word-break: break-word;
   }

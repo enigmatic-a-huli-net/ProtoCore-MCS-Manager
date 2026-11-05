@@ -11,7 +11,7 @@ use pcm_core::detect::{self, Detection};
 use pcm_core::mods::{self, ModReport, MovedMod};
 use pcm_core::plugins::{self, PluginReport};
 use pcm_core::process::{LogLine, Metrics, StatusInfo};
-use pcm_core::{launch, props, util};
+use pcm_core::{launch, props, update, util};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -74,6 +74,7 @@ pub struct AppSettings {
     theme: Theme,
     close_to_tray: bool,
     console_lines: usize,
+    check_updates: bool,
 }
 
 #[tauri::command]
@@ -84,6 +85,7 @@ pub fn save_settings(state: State<AppState>, settings: AppSettings) -> R<()> {
         c.theme = settings.theme;
         c.close_to_tray = settings.close_to_tray;
         c.console_lines = settings.console_lines.clamp(500, 50_000);
+        c.check_updates = settings.check_updates;
     }
     state.save()
 }
@@ -364,7 +366,11 @@ pub fn start_blocking(app: &AppHandle, id: &str, allow_snapshot: bool) -> R<()> 
 
 #[tauri::command]
 pub async fn start_server(app: AppHandle, id: String) -> R<()> {
-    bg(move || start_blocking(&app, &id, true)).await
+    bg(move || {
+        app.state::<AppState>().quarantine_rounds.lock().unwrap().remove(&id);
+        start_blocking(&app, &id, true)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -586,6 +592,120 @@ pub async fn check_repo(app: AppHandle, id: String) -> R<String> {
         let state = app.state::<AppState>();
         let s = server_of(&state, &id)?;
         Repo::for_server(&state.paths, &s).map_err(e)?.check().map_err(e)
+    })
+    .await
+}
+
+// ===================================================================== обновление менеджера
+
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> R<update::UpdateInfo> {
+    bg(move || {
+        let repo = app.state::<AppState>().config.lock().unwrap().update_repo.clone();
+        update::check(&repo, env!("CARGO_PKG_VERSION")).map_err(e)
+    })
+    .await
+}
+
+#[derive(Clone, Serialize)]
+struct UpdateProgress {
+    done: u64,
+    total: u64,
+}
+
+/// Скачать, подготовить замену и закрыть менеджер (серверы мягко останавливаются).
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> R<()> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let repo = state.config.lock().unwrap().update_repo.clone();
+        let info = update::check(&repo, env!("CARGO_PKG_VERSION")).map_err(e)?;
+        if !info.available {
+            return Err("уже установлена последняя версия".into());
+        }
+        let mut last = std::time::Instant::now();
+        update::download(&info, |done, total| {
+            if last.elapsed() > Duration::from_millis(150) || done == total {
+                let _ = app.emit("pcm://update", UpdateProgress { done, total });
+                last = std::time::Instant::now();
+            }
+        })
+        .map_err(e)?;
+        update::apply(&state.paths).map_err(e)?;
+        crate::quit(&app);
+        Ok(())
+    })
+    .await
+}
+
+// ===================================================================== диагностика
+
+/// source: "auto" (свежий краш-репорт + консоль), "crash", "latest" (logs/latest.log), "console"
+#[tauri::command]
+pub async fn analyze_logs(app: AppHandle, id: String, source: String) -> R<pcm_core::analyze::Analysis> {
+    bg(move || {
+        use pcm_core::analyze;
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        let dir = s.dir();
+        let console: String = state.pm.log_buffer(&id, 0).iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        let (text, src, path) = match source.as_str() {
+            "crash" => {
+                let p = analyze::latest_crash_report(&dir).ok_or("краш-репортов нет")?;
+                (std::fs::read_to_string(&p).map_err(e)?, "crash".to_string(), p.to_string_lossy().to_string())
+            }
+            "latest" => {
+                let p = dir.join("logs/latest.log");
+                (std::fs::read_to_string(&p).map_err(|_| "logs/latest.log не найден".to_string())?, "latest".into(), p.to_string_lossy().to_string())
+            }
+            "console" => (console, "console".into(), String::new()),
+            _ => {
+                // авто: краш-репорт за последние сутки + консоль; если консоль пустая — latest.log
+                let day = std::time::SystemTime::now() - Duration::from_secs(86_400);
+                let base = if console.trim().is_empty() {
+                    std::fs::read_to_string(dir.join("logs/latest.log")).unwrap_or_default()
+                } else {
+                    console
+                };
+                analyze::gather(&dir, &base, Some(day))
+            }
+        };
+        if text.trim().is_empty() {
+            return Err("лог пуст — запусти сервер или выбери другой источник".into());
+        }
+        let report = s.core.supports_mods().then(|| mods::list(&dir, s.core.mod_loader(), &s.mods));
+        let header = format!(
+            "== ProtoCore-MCS-Manager {} · {} {} · Minecraft {} · источник: {} ==",
+            env!("CARGO_PKG_VERSION"),
+            s.core.label(),
+            s.loader_version,
+            s.mc_version,
+            if path.is_empty() { src.clone() } else { path.clone() }
+        );
+        Ok(analyze::run(&src, &path, &text, report.as_ref(), &header))
+    })
+    .await
+}
+
+/// Сохраняет сжатый лог в папку сервера и возвращает путь.
+#[tauri::command]
+pub fn save_compressed(state: State<AppState>, id: String, text: String) -> R<String> {
+    let s = server_of(&state, &id)?;
+    let dir = s.dir().join("pcm-logs");
+    std::fs::create_dir_all(&dir).map_err(e)?;
+    let name = format!("compact-{}.txt", util::stamp());
+    let p = dir.join(name);
+    std::fs::write(&p, text).map_err(e)?;
+    Ok(p.to_string_lossy().to_string())
+}
+
+/// Отправить мод в карантин вручную (из диагностики).
+#[tauri::command]
+pub async fn quarantine_mod(app: AppHandle, id: String, file: String, reason: String) -> R<()> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        mods::set_enabled(&s.dir(), &file, false, "crash", &reason).map(|_| ()).map_err(e)
     })
     .await
 }

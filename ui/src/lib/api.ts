@@ -18,6 +18,10 @@ export interface Theme {
   radius: number;
   font_size: number;
   animations: boolean;
+  /** 0.5 — медленно, 1 — обычно, 2 — быстро */
+  anim_speed: number;
+  /** показывать анимации, даже если в Windows включено «уменьшить движение» */
+  anim_force: boolean;
 }
 
 export interface LaunchSettings {
@@ -53,6 +57,10 @@ export interface ServerEntry {
     disable_blacklisted: boolean;
     extra_client_ids: string[];
     never_disable: string[];
+    auto_quarantine: boolean;
+    quarantine_content: boolean;
+    quarantine_restart: boolean;
+    quarantine_max_rounds: number;
   };
   auto_restart: boolean;
 }
@@ -62,6 +70,8 @@ export interface Config {
   theme: Theme;
   close_to_tray: boolean;
   console_lines: number;
+  check_updates: boolean;
+  update_repo: string;
   selected: string;
   servers: ServerEntry[];
 }
@@ -185,7 +195,7 @@ export interface BackupEvent {
 
 export const api = {
   state: () => invoke<AppSnapshot>("get_state"),
-  saveSettings: (settings: Pick<Config, "language" | "theme" | "close_to_tray" | "console_lines">) =>
+  saveSettings: (settings: Pick<Config, "language" | "theme" | "close_to_tray" | "console_lines" | "check_updates">) =>
     invoke<void>("save_settings", { settings }),
   branding: () => invoke<{ logo: string | null; splash: string | null }>("get_branding"),
 
@@ -225,7 +235,25 @@ export const api = {
   deleteSnapshot: (id: string, snapshot: string) => invoke<void>("delete_snapshot", { id, snapshot }),
   rollback: (id: string, snapshot: string, startAfter: boolean) => invoke<void>("rollback", { id, snapshot, startAfter }),
   checkRepo: (id: string) => invoke<string>("check_repo", { id }),
+
+  analyze: (id: string, source: "auto" | "crash" | "latest" | "console") => invoke<Analysis>("analyze_logs", { id, source }),
+  saveCompressed: (id: string, text: string) => invoke<string>("save_compressed", { id, text }),
+  quarantine: (id: string, file: string, reason: string) => invoke<void>("quarantine_mod", { id, file, reason }),
+
+  checkUpdate: () => invoke<UpdateInfo>("check_update"),
+  installUpdate: () => invoke<void>("install_update"),
 };
+
+export interface UpdateInfo {
+  available: boolean;
+  current: string;
+  latest: string;
+  notes: string;
+  published: string;
+  html_url: string;
+  asset_url: string;
+  asset_size: number;
+}
 
 export function on<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {
   return listen<T>(event, (e) => cb(e.payload));
@@ -248,3 +276,25 @@ export const supportsMods = (c: CoreKind) =>
   ["fabric", "quilt", "forge", "neoforge", "youer", "mohist", "arclight"].includes(c);
 export const supportsPlugins = (c: CoreKind) =>
   ["paper", "purpur", "folia", "spigot", "youer", "mohist", "arclight"].includes(c);
+
+export interface Culprit { file: string; name: string; id: string; confidence: "low" | "medium" | "high"; client_only: boolean; enabled: boolean }
+export interface Finding {
+  code: string;
+  severity: "info" | "warn" | "error";
+  title: string;
+  detail: string;
+  hint: string;
+  line: string;
+  culprits: Culprit[];
+  count: number;
+}
+export interface Analysis {
+  source: string;
+  source_path: string;
+  findings: Finding[];
+  compressed: string;
+  total_lines: number;
+  errors: number;
+  warnings: number;
+  lag_warnings: number;
+}

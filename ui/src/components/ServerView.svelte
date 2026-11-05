@@ -4,6 +4,7 @@
   import { ask } from "@tauri-apps/plugin-dialog";
   import Icon from "./Icon.svelte";
   import Console from "./tabs/Console.svelte";
+  import Diagnostics from "./tabs/Diagnostics.svelte";
   import Mods from "./tabs/Mods.svelte";
   import Plugins from "./tabs/Plugins.svelte";
   import Backups from "./tabs/Backups.svelte";
@@ -54,6 +55,7 @@
   const tabs = $derived(
     [
       { id: "console", icon: "terminal", show: true },
+      { id: "diag", icon: "alert", show: true },
       { id: "mods", icon: "puzzle", show: supportsMods(server.core) || server.core === "unknown" },
       { id: "plugins", icon: "plug", show: supportsPlugins(server.core) },
       { id: "backups", icon: "archive", show: true },
@@ -136,6 +138,7 @@
 
   <div class="content">
     {#if app.tab === "console"}<Console {server} />
+    {:else if app.tab === "diag"}<Diagnostics {server} />
     {:else if app.tab === "mods"}<Mods {server} />
     {:else if app.tab === "plugins"}<Plugins {server} />
     {:else if app.tab === "backups"}<Backups {server} />
@@ -168,9 +171,9 @@
     color: var(--muted);
   }
   .ring { position: absolute; inset: 0; border-radius: 16px; border: 2px solid transparent; }
-  .running .ring { border-color: var(--ok); animation: pulse 2.4s ease-out infinite; }
+  .running .ring { border-color: var(--ok); animation: pulse calc(3.2s * var(--anim-k)) ease-out infinite; }
   .running .glyph { color: var(--ok); }
-  .starting .ring, .stopping .ring { border-color: var(--warn); border-style: dashed; animation: spin 3s linear infinite; }
+  .starting .ring, .stopping .ring { border-color: var(--warn); border-style: dashed; animation: spin calc(7s * var(--anim-k)) linear infinite; }
   .crashed .ring { border-color: var(--err); }
   .crashed .glyph { color: var(--err); }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 9px transparent; } }

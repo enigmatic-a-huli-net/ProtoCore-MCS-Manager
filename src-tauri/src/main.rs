@@ -42,7 +42,7 @@ fn show_window(app: &AppHandle) {
 }
 
 /// Выход: мягко останавливаем все серверы, затем закрываемся.
-fn quit(app: &AppHandle) {
+pub(crate) fn quit(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
@@ -63,6 +63,7 @@ fn quit(app: &AppHandle) {
 }
 
 fn main() {
+    pcm_core::update::cleanup();
     let paths = AppPaths::from_exe();
     let _ = paths.ensure();
     let config = Config::load(&paths);
@@ -80,6 +81,7 @@ fn main() {
             busy: Mutex::new(HashSet::new()),
             quitting: Mutex::new(false),
             crash_log: Mutex::new(Vec::new()),
+            quarantine_rounds: Mutex::new(Default::default()),
         })
         .setup(move |app| {
             let _ = sink.app.set(app.handle().clone());
@@ -157,6 +159,11 @@ fn main() {
             commands::delete_snapshot,
             commands::rollback,
             commands::check_repo,
+            commands::check_update,
+            commands::analyze_logs,
+            commands::save_compressed,
+            commands::quarantine_mod,
+            commands::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("не удалось запустить приложение");

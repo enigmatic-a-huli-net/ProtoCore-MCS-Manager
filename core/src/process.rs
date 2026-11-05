@@ -71,6 +71,8 @@ pub struct ExitInfo {
     pub crashed: bool,
     /// Сколько секунд проработал
     pub uptime: u64,
+    /// Успел ли сервер полностью запуститься («Done»)
+    pub reached_running: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -103,6 +105,7 @@ struct Inner {
     players: BTreeSet<String>,
     stop_requested: bool,
     exit_code: Option<i32>,
+    reached_running: bool,
 }
 
 pub struct Instance {
@@ -143,11 +146,20 @@ pub fn detect_level(s: &str) -> Level {
         Level::Error
     } else if head.contains("/WARN]") || head.contains("[WARN]") || head.contains(" WARN ") {
         Level::Warn
-    } else if s.starts_with("\tat ") || s.starts_with("Caused by:") || s.starts_with("Exception in thread") {
+    } else if s.starts_with("\tat ") || s.starts_with("Caused by:") || s.starts_with("Exception in thread") || is_exception_head(s) {
         Level::Error
     } else {
         Level::Info
     }
+}
+
+/// «java.lang.RuntimeException: …» — первая строка исключения.
+fn is_exception_head(s: &str) -> bool {
+    let head = s.split(':').next().unwrap_or("");
+    head.contains('.')
+        && !head.contains(' ')
+        && (head.ends_with("Exception") || head.ends_with("Error"))
+        && head.chars().next().is_some_and(|c| c.is_ascii_lowercase())
 }
 
 impl Instance {
@@ -163,6 +175,7 @@ impl Instance {
                 players: BTreeSet::new(),
                 stop_requested: false,
                 exit_code: None,
+                reached_running: false,
             }),
             log: Mutex::new(VecDeque::with_capacity(cap.min(10_000))),
             cap: cap.max(200),
@@ -298,6 +311,7 @@ impl ProcessManager {
             i.players.clear();
             i.stop_requested = false;
             i.exit_code = None;
+            i.reached_running = false;
             i.status = Status::Starting;
         }
         self.sink.status(id, &inst.status_info());
@@ -311,13 +325,17 @@ impl ProcessManager {
         }
         drop(tx);
 
-        // сборщик
+        // сборщик; по окончании сообщает наблюдателю, что все строки уже в буфере
+        let (done_tx, done_rx) = mpsc::channel::<()>();
         {
             let mgr = Arc::clone(self);
             let inst = Arc::clone(&inst);
             thread::Builder::new()
                 .name(format!("pcm-log-{id}"))
-                .spawn(move || mgr.collector(inst, rx))
+                .spawn(move || {
+                    mgr.collector(inst, rx);
+                    let _ = done_tx.send(());
+                })
                 .ok();
         }
         // наблюдатель
@@ -326,7 +344,7 @@ impl ProcessManager {
             let inst = Arc::clone(&inst);
             thread::Builder::new()
                 .name(format!("pcm-wait-{id}"))
-                .spawn(move || mgr.watcher(inst))
+                .spawn(move || mgr.watcher(inst, done_rx))
                 .ok();
         }
         Ok(())
@@ -380,6 +398,7 @@ impl ProcessManager {
             let mut i = inst.inner.lock().unwrap();
             if i.status == Status::Starting && re_done().is_match(text) {
                 i.status = Status::Running;
+                i.reached_running = true;
                 changed = true;
             }
             if let Some(c) = re_join().captures(text) {
@@ -394,7 +413,7 @@ impl ProcessManager {
         }
     }
 
-    fn watcher(&self, inst: Arc<Instance>) {
+    fn watcher(&self, inst: Arc<Instance>, collector_done: Receiver<()>) {
         let code = loop {
             {
                 let mut i = inst.inner.lock().unwrap();
@@ -406,7 +425,9 @@ impl ProcessManager {
             }
             thread::sleep(Duration::from_millis(400));
         };
-        let (crashed, uptime) = {
+        // ждём, пока последние строки лога (обычно самые важные — ошибка) попадут в буфер
+        let _ = collector_done.recv_timeout(Duration::from_secs(5));
+        let (crashed, uptime, reached_running) = {
             let mut i = inst.inner.lock().unwrap();
             let crashed = !i.stop_requested;
             i.child = None;
@@ -416,7 +437,7 @@ impl ProcessManager {
             i.players.clear();
             i.status = if crashed { Status::Crashed } else { Status::Stopped };
             let up = i.started.take().map(|s| s.elapsed().as_secs()).unwrap_or(0);
-            (crashed, up)
+            (crashed, up, i.reached_running)
         };
         let msg = match (crashed, code) {
             (false, _) => "■ Сервер остановлен".to_string(),
@@ -425,7 +446,7 @@ impl ProcessManager {
         };
         self.system(&inst.id, msg);
         self.sink.status(&inst.id, &inst.status_info());
-        self.sink.exited(&inst.id, &ExitInfo { code, crashed, uptime });
+        self.sink.exited(&inst.id, &ExitInfo { code, crashed, uptime, reached_running });
     }
 
     /// Отправить команду в консоль сервера.

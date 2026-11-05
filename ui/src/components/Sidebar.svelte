@@ -115,7 +115,7 @@
   .players { display: inline-flex; align-items: center; gap: 3px; font-size: 0.8em; color: var(--ok); }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--line); }
   .dot.running { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
-  .dot.starting, .dot.stopping { background: var(--warn); animation: blink 1s ease-in-out infinite; }
+  .dot.starting, .dot.stopping { background: var(--warn); animation: blink calc(1.8s * var(--anim-k)) ease-in-out infinite; }
   .dot.crashed { background: var(--err); }
   .none { padding: 8px 10px; font-size: 0.9em; }
   .foot {

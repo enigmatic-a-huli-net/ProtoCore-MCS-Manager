@@ -16,7 +16,7 @@ base64 = "0.22"
 regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
-ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+ureq = { version = "2", default-features = false, features = ["tls", "native-certs", "json"] }
 rand = "0.8"
 thiserror = "2"
 log = "0.4"

@@ -8,9 +8,10 @@
 
   const c = app.config!;
   let lang = $state(c.language);
-  let theme = $state<Theme>({ ...c.theme });
+  let theme = $state<Theme>({ ...DEFAULT_THEME, ...c.theme });
   let tray = $state(c.close_to_tray);
   let lines = $state(c.console_lines);
+  let checkUpdates = $state(c.check_updates ?? true);
 
   // предпросмотр темы сразу, без сохранения
   $effect(() => applyTheme($state.snapshot(theme) as Theme));
@@ -21,7 +22,7 @@
 
   async function save() {
     try {
-      const settings = { language: lang, theme: $state.snapshot(theme) as Theme, close_to_tray: tray, console_lines: Number(lines) };
+      const settings = { language: lang, theme: $state.snapshot(theme) as Theme, close_to_tray: tray, console_lines: Number(lines), check_updates: checkUpdates };
       await api.saveSettings(settings);
       Object.assign(app.config!, settings);
       toast(t("set.saved"), "ok");
@@ -98,11 +99,25 @@
       <label class="field"><span>{t("set.font")} — {theme.font_size}</span><input type="range" min="12" max="18" bind:value={theme.font_size} /></label>
     </div>
     <label class="check"><input type="checkbox" bind:checked={theme.animations} />{t("set.anim")}</label>
+    {#if theme.animations}
+      <div class="grid">
+        <label class="field">
+          <span>{t("set.animSpeed")} — ×{theme.anim_speed.toFixed(2)}</span>
+          <div class="row small muted">
+            {t("set.animSlow")}
+            <input type="range" min="0.5" max="2" step="0.25" bind:value={theme.anim_speed} class="grow" />
+            {t("set.animFast")}
+          </div>
+        </label>
+        <label class="check" style="align-self:end"><input type="checkbox" bind:checked={theme.anim_force} />{t("set.animForce")}</label>
+      </div>
+    {/if}
     <div><button type="button" class="btn sm" onclick={reset}>{t("set.reset")}</button></div>
   </section>
 
   <section class="panel">
     <label class="check"><input type="checkbox" bind:checked={tray} />{t("set.tray")}</label>
+    <label class="check"><input type="checkbox" bind:checked={checkUpdates} />{t("up.auto")}</label>
     <label class="field narrow"><span>{t("set.lines")}</span><input type="number" min="500" max="50000" step="500" bind:value={lines} /></label>
   </section>
 

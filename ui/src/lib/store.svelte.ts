@@ -1,9 +1,9 @@
 // Общее состояние интерфейса (Svelte 5 runes).
-import { api, on, type AppSnapshot, type BackupEvent, type Config, type LogLine, type ServerEntry, type StatusInfo } from "./api";
+import { api, on, type UpdateInfo, type AppSnapshot, type BackupEvent, type Config, type LogLine, type ServerEntry, type StatusInfo } from "./api";
 import { translate, type Key } from "./i18n";
 import { applyTheme } from "./theme";
 
-export type Tab = "console" | "mods" | "plugins" | "backups" | "launch" | "properties";
+export type Tab = "console" | "diag" | "mods" | "plugins" | "backups" | "launch" | "properties";
 
 interface Toast { id: number; kind: "info" | "ok" | "error"; text: string }
 
@@ -21,6 +21,9 @@ export const app = $state({
   backup: {} as Record<string, BackupEvent | null>,
   addOpen: false,
   eulaFor: "" as string,
+  update: null as UpdateInfo | null,
+  updateOpen: false,
+  updateProgress: null as { done: number; total: number } | null,
 });
 
 // Логи держим «сырыми» (без глубокой реактивности) — их тысячи строк.
@@ -96,7 +99,17 @@ export async function init() {
 
   // Системная тема могла смениться — переприменяем
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => app.config && applyTheme(app.config.theme));
+  await on<{ id: string; mods: { name: string }[] }>("pcm://quarantine", ({ id, mods }) => {
+    const s = app.config?.servers.find((x) => x.id === id);
+    toast(`${s?.name ?? ""}: ${t("dg.qEvent", { list: mods.map((m) => m.name).join(", ") })}`, "info");
+  });
+  await on<{ done: number; total: number }>("pcm://update", (p) => (app.updateProgress = p));
   app.ready = true;
+
+  // тихая проверка обновлений при запуске
+  if (app.config!.check_updates) {
+    setTimeout(() => api.checkUpdate().then((u) => (app.update = u)).catch(() => {}), 2500);
+  }
 }
 
 export function clearLocalLog(id: string) {

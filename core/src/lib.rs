@@ -10,10 +10,13 @@
 //! - [`mods`]    — моды: метаданные, иконки, зависимости, конфликты, клиентские моды
 //! - [`plugins`] — плагины Bukkit/Paper: метаданные и зависимости
 //! - [`backup`]  — снапшоты restic и откат
+//! - [`analyze`] — разбор логов и краш-репортов, сжатый лог
 //! - [`props`]   — чтение и запись server.properties
+//! - [`update`]  — обновление самого менеджера с GitHub
 //!
 //! Интерфейс (src-tauri + ui) только вызывает функции отсюда.
 
+pub mod analyze;
 pub mod backup;
 pub mod config;
 pub mod detect;
@@ -23,6 +26,7 @@ pub mod mods;
 pub mod plugins;
 pub mod process;
 pub mod props;
+pub mod update;
 pub mod util;
 
 pub use error::{Error, Result};

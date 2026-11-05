@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { fade } from "svelte/transition";
   import { app, init, selected, fail, t } from "./lib/store.svelte";
   import { logo } from "./lib/brand";
   import TitleBar from "./components/TitleBar.svelte";
@@ -10,11 +11,12 @@
   import AddServer from "./components/AddServer.svelte";
   import EulaDialog from "./components/EulaDialog.svelte";
   import Toasts from "./components/Toasts.svelte";
+  import UpdateDialog from "./components/UpdateDialog.svelte";
 
   let splashDone = $state(false);
 
   onMount(() => {
-    const minShow = new Promise((r) => setTimeout(r, 700));
+    const minShow = new Promise((r) => setTimeout(r, 1400));
     Promise.all([init(), minShow])
       .catch(fail)
       .finally(() => (splashDone = true));
@@ -24,7 +26,7 @@
 </script>
 
 {#if !splashDone || !app.ready}
-  <Splash />
+  <div class="splash-wrap" out:fade={{ duration: 280 }}><Splash /></div>
 {:else}
   <div class="shell">
     <TitleBar />
@@ -52,9 +54,11 @@
 
 {#if app.addOpen}<AddServer />{/if}
 {#if app.eulaFor}<EulaDialog />{/if}
+{#if app.updateOpen}<UpdateDialog />{/if}
 <Toasts />
 
 <style>
+  .splash-wrap { position: fixed; inset: 0; z-index: 70; }
   .shell { display: grid; grid-template-rows: auto 1fr; height: 100%; }
   .body { display: grid; grid-template-columns: 252px 1fr; min-height: 0; }
   main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }

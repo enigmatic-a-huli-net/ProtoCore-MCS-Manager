@@ -19,6 +19,8 @@ pub struct AppState {
     pub quitting: Mutex<bool>,
     /// История быстрых падений для защиты от бесконечного перезапуска
     pub crash_log: Mutex<Vec<(String, Instant)>>,
+    /// Сколько раз подряд срабатывал автокарантин (сбрасывается при ручном запуске)
+    pub quarantine_rounds: Mutex<std::collections::HashMap<String, u32>>,
 }
 
 impl AppState {
@@ -96,19 +98,69 @@ impl EventSink for TauriSink {
     }
 }
 
-/// Автоперезапуск при падении с защитой от «краш-петли»:
-/// если сервер упал 3 раза за 10 минут, едва запустившись, — больше не перезапускаем.
+#[derive(Clone, Serialize)]
+struct QuarantineEvent<'a> {
+    id: &'a str,
+    mods: &'a [pcm_core::mods::MovedMod],
+}
+
+/// После падения:
+/// 1. автокарантин — если в логе виден виновный мод, он уходит в mods_disabled/ и сервер стартует снова;
+/// 2. иначе автоперезапуск (если включён) с защитой от «краш-петли»:
+///    3 падения за 10 минут, едва запустившись, — больше не перезапускаем.
 fn on_crash(app: AppHandle, id: String, info: ExitInfo) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
-        let auto = state
-            .config
-            .lock()
-            .unwrap()
-            .server(&id)
-            .map(|s| s.auto_restart)
-            .unwrap_or(false);
-        if !auto {
+        let Some(server) = state.config.lock().unwrap().server(&id).cloned() else { return };
+
+        // ---------- автокарантин
+        if server.mods.auto_quarantine && server.core.supports_mods() {
+            let rounds = {
+                let mut r = state.quarantine_rounds.lock().unwrap();
+                let e = r.entry(id.clone()).or_insert(0);
+                if info.reached_running && info.uptime > 300 {
+                    *e = 0; // сервер нормально поработал — счётчик сначала
+                }
+                *e
+            };
+            if rounds < server.mods.quarantine_max_rounds {
+                let console: String = state
+                    .pm
+                    .log_buffer(&id, 0)
+                    .iter()
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let since = std::time::SystemTime::now() - Duration::from_secs(info.uptime + 15);
+                let (text, _, _) = pcm_core::analyze::gather(&server.dir(), &console, Some(since));
+                match pcm_core::analyze::auto_quarantine(&server, &text, info.reached_running) {
+                    Ok((_, moved)) if !moved.is_empty() => {
+                        *state.quarantine_rounds.lock().unwrap().entry(id.clone()).or_insert(0) += 1;
+                        for m in &moved {
+                            state.pm.system(&id, format!("🧪 Карантин: {} → mods_disabled ({})", m.name, m.reason));
+                        }
+                        let _ = app.emit("pcm://quarantine", QuarantineEvent { id: &id, mods: &moved });
+                        if server.mods.quarantine_restart {
+                            state.pm.system(&id, "↻ Запуск без этих модов через 3 секунды…");
+                            std::thread::sleep(Duration::from_secs(3));
+                            if !state.pm.is_running(&id) {
+                                if let Err(e) = crate::commands::start_blocking(&app, &id, false) {
+                                    state.pm.system(&id, format!("✖ Запуск не удался: {e}"));
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(e) => state.pm.system(&id, format!("⚠ Автокарантин: {e}")),
+                }
+            } else {
+                state.pm.system(&id, "⛔ Лимит автокарантина исчерпан — разберись по вкладке «Диагностика»");
+            }
+        }
+
+        // ---------- автоперезапуск
+        if !server.auto_restart {
             return;
         }
         {
@@ -119,7 +171,7 @@ fn on_crash(app: AppHandle, id: String, info: ExitInfo) {
             if recent >= 3 && info.uptime < 300 {
                 state.pm.system(
                     &id,
-                    "⛔ Сервер падает раз за разом — автоперезапуск остановлен. Посмотри «Сжатый лог» и моды",
+                    "⛔ Сервер падает раз за разом — автоперезапуск остановлен. Посмотри вкладку «Диагностика»",
                 );
                 return;
             }

@@ -88,6 +88,10 @@ pub struct Theme {
     pub font_size: u32,
     /// Включить анимации интерфейса
     pub animations: bool,
+    /// Скорость анимаций: 0.5 — медленно, 1 — обычно, 2 — быстро
+    pub anim_speed: f32,
+    /// Показывать анимации, даже если в Windows включено «уменьшить движение»
+    pub anim_force: bool,
 }
 
 impl Default for Theme {
@@ -101,6 +105,8 @@ impl Default for Theme {
             radius: 10,
             font_size: 14,
             animations: true,
+            anim_speed: 1.0,
+            anim_force: false,
         }
     }
 }
@@ -212,6 +218,15 @@ pub struct ModSettings {
     pub extra_client_ids: Vec<String>,
     /// id модов, которые никогда не трогать автоматически
     pub never_disable: Vec<String>,
+    /// Автокарантин: если сервер упал из-за мода — перенести мод в mods_disabled/
+    pub auto_quarantine: bool,
+    /// Разрешить карантин не только клиентских модов.
+    /// Осторожно: блоки и предметы убранного мода пропадут из мира (снапшот есть).
+    pub quarantine_content: bool,
+    /// После карантина запустить сервер снова
+    pub quarantine_restart: bool,
+    /// Сколько раз подряд можно отправлять моды в карантин, пока сервер не запустится
+    pub quarantine_max_rounds: u32,
 }
 
 impl Default for ModSettings {
@@ -221,6 +236,10 @@ impl Default for ModSettings {
             disable_blacklisted: false,
             extra_client_ids: vec![],
             never_disable: vec![],
+            auto_quarantine: true,
+            quarantine_content: false,
+            quarantine_restart: true,
+            quarantine_max_rounds: 5,
         }
     }
 }
@@ -296,6 +315,10 @@ pub struct Config {
     pub close_to_tray: bool,
     /// Сколько строк консоли держать в памяти на сервер
     pub console_lines: usize,
+    /// Проверять обновления менеджера при запуске
+    pub check_updates: bool,
+    /// Репозиторий GitHub, откуда берутся обновления
+    pub update_repo: String,
     /// Последний выбранный сервер
     pub selected: String,
     pub servers: Vec<ServerEntry>,
@@ -308,6 +331,8 @@ impl Default for Config {
             theme: Theme::default(),
             close_to_tray: true,
             console_lines: 5000,
+            check_updates: true,
+            update_repo: crate::update::DEFAULT_REPO.into(),
             selected: String::new(),
             servers: vec![],
         }
