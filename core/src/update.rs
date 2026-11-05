@@ -3,8 +3,8 @@
 //! 1. `check` — смотрит последний релиз репозитория и сравнивает версию.
 //! 2. `download` — качает `ProtoCore-MCS-Manager-portable.zip` и достаёт из него новый .exe
 //!    рядом со старым (`ProtoCore-MCS-Manager.new.exe`).
-//! 3. `apply` — запускает маленький .cmd, который ждёт закрытия менеджера,
-//!    подменяет .exe и запускает новую версию. Настройки и снапшоты не трогаются.
+//! 3. `apply` — запускает новый .exe в режиме замены: он ждёт закрытия старого,
+//!    копирует себя на его место и запускает. Настройки и снапшоты не трогаются.
 
 use std::fs;
 use std::io::Read;
@@ -111,49 +111,71 @@ pub fn download(info: &UpdateInfo, mut on_progress: impl FnMut(u64, u64)) -> Res
     Ok(dst)
 }
 
-/// Готовит и запускает скрипт замены. После вызова менеджер должен закрыться.
-pub fn apply(paths: &AppPaths) -> Result<()> {
+/// Аргумент, с которым запускается новая версия, чтобы встать на место старой.
+pub const FINISH_ARG: &str = "--pcm-finish-update";
+
+/// Запускает скачанную новую версию в режиме «замены». После вызова менеджер должен закрыться.
+///
+/// Никаких .cmd и окон консоли: новый exe сам ждёт, пока старый закроется
+/// (файл перестанет быть занятым), копирует себя на его место и запускает его.
+pub fn apply(_paths: &AppPaths) -> Result<()> {
     let exe = exe_path()?;
     let staged = staged_path(&exe);
     if !staged.is_file() {
         return Err(Error::other("обновление не скачано"));
     }
-    if !cfg!(windows) {
-        return Err(Error::other("автообновление работает только в Windows"));
+    let mut c = std::process::Command::new(&staged);
+    c.arg(FINISH_ARG).arg(&exe);
+    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    c.spawn().map_err(|e| Error::other(format!("не удалось запустить новую версию: {e}")))?;
+    Ok(())
+}
+
+/// Режим замены (вызывается из main, если передан FINISH_ARG).
+/// Ждёт до 5 минут, пока старый менеджер остановит серверы и закроется,
+/// затем копирует себя поверх старого exe и запускает его.
+pub fn finish(target: &Path) -> Result<()> {
+    let me = exe_path()?;
+    let t0 = std::time::Instant::now();
+    loop {
+        // пока старый exe запущен, Windows не даст его перезаписать
+        match fs::copy(&me, target) {
+            Ok(_) => break,
+            Err(e) => {
+                if t0.elapsed() > std::time::Duration::from_secs(300) {
+                    return Err(Error::other(format!("не удалось заменить {}: {e}", target.display())));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(700));
+            }
+        }
     }
-    paths.ensure()?;
-    let script = paths.data.join("pcm-update.cmd");
-    let pid = std::process::id();
-    let body = format!(
-        "@echo off\r\n\
-         chcp 65001 >nul\r\n\
-         :wait\r\n\
-         tasklist /FI \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n\
-         set tries=0\r\n\
-         :swap\r\n\
-         move /Y \"{new}\" \"{cur}\" >nul 2>&1\r\n\
-         if errorlevel 1 (set /a tries+=1 & if %tries% lss 20 (timeout /t 1 /nobreak >nul & goto swap))\r\n\
-         start \"\" \"{cur}\"\r\n\
-         del \"%~f0\"\r\n",
-        new = staged.display(),
-        cur = exe.display(),
-    );
-    fs::write(&script, body)?;
-    let mut c = std::process::Command::new("cmd");
-    c.args(["/C", &script.to_string_lossy()]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // без окна и отдельно от нашего процесса
-        c.creation_flags(0x0800_0000 | 0x0000_0008);
-    }
-    c.spawn()?;
+    std::process::Command::new(target)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
     Ok(())
 }
 
 /// Удаляет недокачанное/оставшееся обновление (при старте).
+/// Удаляет файл новой версии после успешной замены. Он может ещё пару секунд
+/// работать (он только что нас запустил), поэтому пробуем несколько раз в фоне.
 pub fn cleanup() {
-    if let Ok(exe) = exe_path() {
-        let _ = fs::remove_file(staged_path(&exe));
+    let Ok(exe) = exe_path() else { return };
+    let staged = staged_path(&exe);
+    if !staged.exists() {
+        return;
+    }
+    std::thread::spawn(move || {
+        for _ in 0..30 {
+            if fs::remove_file(&staged).is_ok() || !staged.exists() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    });
+    // старый скрипт обновления из версий до 0.3.2
+    if let Some(dir) = exe.parent() {
+        let _ = fs::remove_file(dir.join("data").join("pcm-update.cmd"));
     }
 }

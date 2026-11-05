@@ -63,6 +63,14 @@ pub(crate) fn quit(app: &AppHandle) {
 }
 
 fn main() {
+    // режим замены при обновлении: этот процесс — новая версия, встаём на место старой
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(pcm_core::update::FINISH_ARG) {
+        if let Some(target) = args.get(2) {
+            let _ = pcm_core::update::finish(std::path::Path::new(target));
+        }
+        return;
+    }
     pcm_core::update::cleanup();
     let paths = AppPaths::from_exe();
     let _ = paths.ensure();
