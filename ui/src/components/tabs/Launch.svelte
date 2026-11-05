@@ -1,0 +1,212 @@
+<script lang="ts">
+  import { open as pick, ask } from "@tauri-apps/plugin-dialog";
+  import Icon from "../Icon.svelte";
+  import { api, CORE_LABEL, supportsMods, type CoreKind, type ServerEntry } from "../../lib/api";
+  import { app, t, toast, fail, saveServer, refreshState } from "../../lib/store.svelte";
+
+  let { server }: { server: ServerEntry } = $props();
+
+  // Работаем с копией, сохраняем по кнопке
+  let s = $state<ServerEntry>(structuredClone($state.snapshot(server)) as ServerEntry);
+  let extraClient = $state(s.mods.extra_client_ids.join(", "));
+  let never = $state(s.mods.never_disable.join(", "));
+  let preview = $state("");
+  let previewErr = $state("");
+  let scripts = $state<string[]>([]);
+
+  async function loadPreview() {
+    try {
+      preview = await api.launchPreview(server.id);
+      previewErr = "";
+    } catch (e) {
+      preview = "";
+      previewErr = String(e);
+    }
+  }
+  loadPreview();
+  api.detect(server.path).then((d) => (scripts = d.scripts)).catch(() => {});
+
+  const ids = (x: string) => x.split(",").map((v) => v.trim()).filter(Boolean);
+
+  async function save() {
+    try {
+      s.mods.extra_client_ids = ids(extraClient);
+      s.mods.never_disable = ids(never);
+      s.launch.memory_mb = Math.max(512, Number(s.launch.memory_mb) || 4096);
+      s = (await saveServer(s)) as ServerEntry;
+      toast(t("ln.saved"), "ok");
+      loadPreview();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function redetect() {
+    try {
+      const [srv] = await api.redetect(server.id);
+      s.core = srv.core;
+      s.mc_version = srv.mc_version;
+      s.loader_version = srv.loader_version;
+      await refreshState();
+      loadPreview();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function chooseScript() {
+    const f = await pick({ defaultPath: server.path, filters: [{ name: "Script", extensions: ["bat", "cmd", "sh"] }] });
+    if (typeof f === "string") s.launch.script = f;
+  }
+  async function chooseJava() {
+    const f = await pick({ filters: [{ name: "Java", extensions: ["exe", ""] }] });
+    if (typeof f === "string") s.launch.java_path = f;
+  }
+
+  async function remove() {
+    if (!(await ask(t("confirm.remove", { name: server.name }), { kind: "warning" }))) return;
+    try {
+      await api.removeServer(server.id);
+      await refreshState();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  const CORES: CoreKind[] = ["vanilla", "paper", "purpur", "folia", "spigot", "fabric", "quilt", "forge", "neoforge", "youer", "mohist", "arclight"];
+  const memGb = $derived((s.launch.memory_mb / 1024).toFixed(1));
+</script>
+
+<form class="wrapx scroll" onsubmit={(e) => { e.preventDefault(); save(); }}>
+  <section class="panel">
+    <h3>{t("ln.general")}</h3>
+    <div class="grid2">
+      <label class="field"><span>{t("ln.name")}</span><input bind:value={s.name} /></label>
+      <label class="field"><span>{t("ln.path")}</span><input value={s.path} readonly /></label>
+      <label class="field">
+        <span>{t("ln.core")}</span>
+        <select bind:value={s.core} onchange={() => (s.core_override = true)}>
+          {#each CORES as c}<option value={c}>{CORE_LABEL[c]}</option>{/each}
+          <option value="unknown">?</option>
+        </select>
+      </label>
+      <label class="field"><span>{t("ln.mc")}</span><input bind:value={s.mc_version} /></label>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" checked={!s.core_override} onchange={(e) => (s.core_override = !e.currentTarget.checked)} />{t("ln.coreAuto")}</label>
+      <span class="grow"></span>
+      <button type="button" class="btn sm" onclick={redetect}><Icon name="search" size={14} />{t("ln.redetect")}</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>{t("ln.mode")}</h3>
+    <div class="modes">
+      <label class:on={s.launch.mode === "auto"}><input type="radio" bind:group={s.launch.mode} value="auto" />{t("ln.auto")}</label>
+      <label class:on={s.launch.mode === "script"}><input type="radio" bind:group={s.launch.mode} value="script" />{t("ln.script")}</label>
+    </div>
+
+    {#if s.launch.mode === "script"}
+      <label class="field">
+        <span>{t("ln.scriptPath")}</span>
+        <div class="row">
+          <input bind:value={s.launch.script} list="scripts" />
+          <button type="button" class="btn" onclick={chooseScript}>{t("act.browse")}</button>
+        </div>
+        <datalist id="scripts">{#each scripts as x}<option value={x}></option>{/each}</datalist>
+      </label>
+    {:else}
+      <div class="grid2">
+        <label class="field">
+          <span>{t("ln.java")}</span>
+          <div class="row">
+            <input bind:value={s.launch.java_path} placeholder="java" />
+            <button type="button" class="btn" onclick={chooseJava}>{t("act.browse")}</button>
+          </div>
+        </label>
+        <label class="field">
+          <span>{t("ln.memory")} — {memGb} GB</span>
+          <div class="row">
+            <input type="range" min="1024" max="32768" step="512" bind:value={s.launch.memory_mb} class="grow" />
+            <input type="number" min="512" step="512" bind:value={s.launch.memory_mb} style="width:7em" />
+          </div>
+        </label>
+        <label class="field">
+          <span>{t("ln.preset")}</span>
+          <select bind:value={s.launch.jvm_preset}>
+            <option value="aikar">{t("ln.aikar")}</option>
+            <option value="zgc">{t("ln.zgc")}</option>
+            <option value="none">{t("ln.none")}</option>
+          </select>
+        </label>
+        <label class="field"><span>{t("ln.args")}</span><input bind:value={s.launch.server_args} /></label>
+        <label class="field"><span>{t("ln.extra")}</span><input bind:value={s.launch.extra_jvm_args} placeholder="-Dlog4j2.formatMsgNoLookups=true" /></label>
+        <label class="field"><span>{t("ln.jar")}</span><input bind:value={s.launch.jar_override} /></label>
+      </div>
+    {/if}
+
+    <div class="grid2">
+      <label class="field"><span>{t("ln.stopTimeout")}</span><input type="number" min="10" bind:value={s.launch.stop_timeout_sec} /></label>
+    </div>
+    <label class="check"><input type="checkbox" bind:checked={s.auto_restart} />{t("ln.autoRestart")}</label>
+
+    <div class="preview">
+      <span>{t("ln.preview")}</span>
+      {#if preview}<code>{preview}</code>{:else}<code class="bad">{previewErr}</code>{/if}
+    </div>
+  </section>
+
+  {#if supportsMods(s.core) || s.core === "unknown"}
+    <section class="panel">
+      <h3>{t("ln.modsBlock")}</h3>
+      <label class="check"><input type="checkbox" bind:checked={s.mods.auto_disable_client} />{t("ln.autoClient")}</label>
+      <label class="check indent"><input type="checkbox" bind:checked={s.mods.disable_blacklisted} disabled={!s.mods.auto_disable_client} />{t("ln.autoClientLikely")}</label>
+      <div class="grid2">
+        <label class="field"><span>{t("ln.extraClient")}</span><input bind:value={extraClient} placeholder="mymod, othermod" /></label>
+        <label class="field"><span>{t("ln.neverDisable")}</span><input bind:value={never} placeholder="journeymap" /></label>
+      </div>
+    </section>
+  {/if}
+
+  <div class="actions">
+    <button type="submit" class="btn primary">{t("act.save")}</button>
+    <span class="grow"></span>
+    <button type="button" class="btn danger" onclick={remove}><Icon name="trash" size={14} />{t("act.remove")}</button>
+  </div>
+</form>
+
+<style>
+  .wrapx { flex: 1; padding: 14px 16px 20px; display: grid; align-content: start; gap: 14px; max-width: 920px; }
+  section { padding: 16px 18px; display: grid; gap: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+  .modes { display: flex; gap: 8px; }
+  .modes label {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 14px;
+    border: 1px solid var(--line);
+    border-radius: calc(var(--radius) * 0.8);
+    cursor: pointer;
+  }
+  .modes label.on { border-color: var(--accent); background: var(--accent-soft); }
+  .modes input { accent-color: var(--accent); }
+  .indent { padding-left: 1.7em; }
+  .preview { display: grid; gap: 4px; }
+  .preview span { font-size: 0.85em; color: var(--muted); }
+  .preview code {
+    display: block;
+    padding: 8px 10px;
+    background: var(--console);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 0.8em;
+    white-space: pre-wrap;
+    word-break: break-all;
+    user-select: text;
+  }
+  .preview code.bad { color: var(--err); }
+  .actions { display: flex; gap: 10px; }
+  input[type="range"] { accent-color: var(--accent); height: auto; padding: 0; border: 0; background: none; }
+</style>

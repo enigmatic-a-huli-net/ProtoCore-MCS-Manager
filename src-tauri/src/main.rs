@@ -1,0 +1,173 @@
+//! Точка входа: окно, трей, регистрация команд.
+//!
+//! Экономия ресурсов: при закрытии окна (если включено «сворачивать в трей»)
+//! окно **уничтожается** целиком — веб-движок выгружается из памяти.
+//! В фоне остаются только ядро на Rust и запущенные серверы.
+//! Клик по иконке в трее создаёт окно заново, консоль подтягивается из буфера.
+
+// без чёрного окна консоли в релизной сборке Windows
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod commands;
+mod state;
+
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use pcm_core::config::{AppPaths, Config};
+use pcm_core::process::ProcessManager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+
+use state::{AppState, TauriSink};
+
+const MAIN: &str = "main";
+
+fn show_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(MAIN) {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
+        .title("ProtoCore-MCS-Manager")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(900.0, 560.0)
+        .decorations(false)
+        .transparent(false)
+        .build();
+}
+
+/// Выход: мягко останавливаем все серверы, затем закрываемся.
+fn quit(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        *state.quitting.lock().unwrap() = true;
+        let ids = state.pm.running_ids();
+        for id in &ids {
+            let t = state
+                .config
+                .lock()
+                .unwrap()
+                .server(id)
+                .map(|s| s.launch.stop_timeout_sec)
+                .unwrap_or(60);
+            let _ = state.pm.stop_and_wait(id, Duration::from_secs(t.max(10) as u64));
+        }
+        app.exit(0);
+    });
+}
+
+fn main() {
+    let paths = AppPaths::from_exe();
+    let _ = paths.ensure();
+    let config = Config::load(&paths);
+    let sink = Arc::new(TauriSink::default());
+    let pm = Arc::new(ProcessManager::new(sink.clone(), config.console_lines));
+
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .manage(AppState {
+            paths,
+            config: Mutex::new(config),
+            pm,
+            busy: Mutex::new(HashSet::new()),
+            quitting: Mutex::new(false),
+            crash_log: Mutex::new(Vec::new()),
+        })
+        .setup(move |app| {
+            let _ = sink.app.set(app.handle().clone());
+
+            let open = MenuItem::with_id(app, "open", "Открыть / Open", true, None::<&str>)?;
+            let exit = MenuItem::with_id(app, "quit", "Выход / Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &exit])?;
+            let mut tray = TrayIconBuilder::with_id("pcm")
+                .tooltip("ProtoCore-MCS-Manager")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, ev| match ev.id().as_ref() {
+                    "open" => show_window(app),
+                    "quit" => quit(app),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, ev| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = ev {
+                        show_window(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+
+            show_window(app.handle());
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { .. } = event {
+                let app = window.app_handle();
+                let state = app.state::<AppState>();
+                let to_tray = state.config.lock().unwrap().close_to_tray;
+                if !to_tray && !*state.quitting.lock().unwrap() {
+                    // без трея закрытие окна = выход (серверы останавливаются)
+                    quit(app);
+                }
+                // иначе окно просто уничтожается, приложение живёт в трее
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::get_state,
+            commands::save_settings,
+            commands::get_branding,
+            commands::detect_folder,
+            commands::add_server,
+            commands::remove_server,
+            commands::select_server,
+            commands::reorder_servers,
+            commands::update_server,
+            commands::redetect_server,
+            commands::launch_preview,
+            commands::accept_eula,
+            commands::read_properties,
+            commands::write_properties,
+            commands::start_server,
+            commands::stop_server,
+            commands::kill_server,
+            commands::restart_server,
+            commands::send_command,
+            commands::get_log,
+            commands::clear_log,
+            commands::get_metrics,
+            commands::list_mods,
+            commands::set_mod_enabled,
+            commands::set_mods_enabled,
+            commands::disable_client_mods,
+            commands::list_plugins,
+            commands::set_plugin_enabled,
+            commands::download_restic,
+            commands::restic_status,
+            commands::list_snapshots,
+            commands::backup_now,
+            commands::delete_snapshot,
+            commands::rollback,
+            commands::check_repo,
+        ])
+        .build(tauri::generate_context!())
+        .expect("не удалось запустить приложение");
+
+    app.run(|app, event| {
+        if let RunEvent::ExitRequested { api, code, .. } = event {
+            let state = app.state::<AppState>();
+            // окно закрыли, но мы в трее — не выходим (code == None значит «закрылись все окна»)
+            if code.is_none() && !*state.quitting.lock().unwrap() {
+                api.prevent_exit();
+            }
+        }
+    });
+}

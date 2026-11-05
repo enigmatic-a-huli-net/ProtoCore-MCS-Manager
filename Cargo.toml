@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["core", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+# Минимальный размер и потребление: оптимизация, LTO, без отладочной информации
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

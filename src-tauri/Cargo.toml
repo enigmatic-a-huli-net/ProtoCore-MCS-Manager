@@ -1,0 +1,23 @@
+[package]
+name = "protocore-mcs-manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ProtoCore-MCS-Manager — менеджер серверов Minecraft"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+pcm-core = { path = "../core" }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+
+[features]
+# используется `tauri dev`
+custom-protocol = ["tauri/custom-protocol"]

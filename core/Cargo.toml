@@ -1,0 +1,25 @@
+[package]
+name = "pcm-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Логика ProtoCore-MCS-Manager: серверы, моды, плагины, бэкапы"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+base64 = "0.22"
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+rand = "0.8"
+thiserror = "2"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

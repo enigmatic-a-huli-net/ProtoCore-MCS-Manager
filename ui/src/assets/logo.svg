@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Заготовка логотипа ProtoCore. Замени этот файл или положи branding/logo.png рядом с .exe -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9b7bff"/>
+      <stop offset="1" stop-color="#4f2fd6"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#14121c"/>
+  <path d="M256 84 405 170v172L256 428 107 342V170Z" fill="none" stroke="url(#g)" stroke-width="36" stroke-linejoin="round"/>
+  <path d="M256 170 330 213v86l-74 43-74-43v-86Z" fill="url(#g)"/>
+  <path d="M256 256v86M256 256l74-43M256 256l-74-43" stroke="#14121c" stroke-width="14" stroke-linecap="round"/>
+</svg>
