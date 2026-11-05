@@ -90,7 +90,7 @@ pub fn save_settings(state: State<AppState>, settings: AppSettings) -> R<()> {
         c.close_to_tray = settings.close_to_tray;
         c.console_lines = settings.console_lines.clamp(500, 50_000);
         c.check_updates = settings.check_updates;
-        c.curseforge_key = settings.curseforge_key.trim().to_string();
+        c.curseforge_key = catalog_key(&settings.curseforge_key);
         c.servers_root = settings.servers_root.trim().to_string();
     }
     state.save()
@@ -959,4 +959,13 @@ pub async fn catalog_fix(app: AppHandle, id: String, mod_id: String, range: Stri
         catalog::plan_fix_version(&t, &mod_id, &range, old.map(|m| m.file.as_str()), old.map(|m| m.meta.name.as_str())).map_err(e)
     })
     .await
+}
+
+fn catalog_key(k: &str) -> String {
+    pcm_core::catalog::clean_cf_key(k)
+}
+
+#[tauri::command]
+pub async fn check_cf_key(key: String) -> R<String> {
+    bg(move || pcm_core::catalog::check_cf_key(&key).map_err(e)).await
 }

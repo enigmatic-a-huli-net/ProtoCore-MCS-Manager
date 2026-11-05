@@ -260,6 +260,7 @@ export const api = {
     invoke<Plan>("catalog_plan", { id, kind, source, project, version: version ?? null }),
   catApply: (id: string, kind: Kind, plan: Plan) => invoke<string[]>("catalog_apply", { id, kind, plan }),
   catUpdates: (id: string, kind: Kind) => invoke<UpdatesReport>("catalog_updates", { id, kind }),
+  checkCfKey: (key: string) => invoke<string>("check_cf_key", { key }),
   catFix: (id: string, modId: string, range: string) => invoke<Plan>("catalog_fix", { id, modId, range }),
 
   checkUpdate: () => invoke<UpdateInfo>("check_update"),

@@ -76,7 +76,7 @@ impl Target {
             game_version: s.mc_version.clone(),
             dir: s.dir().join(d),
             old_dir: s.dir().join(o),
-            cf_key: cf_key.trim().to_string(),
+            cf_key: clean_cf_key(cf_key),
         }
     }
 }
@@ -354,6 +354,35 @@ fn hangar_search(t: &Target, query: &str, sort: &str, offset: u32) -> Result<Sea
         })
         .collect();
     Ok(SearchResult { items, total: j["pagination"]["count"].as_u64().unwrap_or(0) })
+}
+
+/// Чистит ключ: кавычки, пробелы, переносы, невидимые символы, приставку «x-api-key:».
+pub fn clean_cf_key(k: &str) -> String {
+    let k = k.trim();
+    let k = k
+        .strip_prefix("x-api-key:")
+        .or_else(|| k.strip_prefix("X-Api-Key:"))
+        .unwrap_or(k);
+    k.chars()
+        .filter(|c| c.is_ascii_graphic() && !matches!(c, '"' | '\'' | '`'))
+        .collect()
+}
+
+/// Проверка ключа: простой запрос к API. Ok — ключ принят.
+pub fn check_cf_key(key: &str) -> Result<String> {
+    let key = clean_cf_key(key);
+    if key.is_empty() {
+        return Err(Error::other("ключ пустой"));
+    }
+    match net::get_json_h("https://api.curseforge.com/v1/games/432", &[("x-api-key", &key)]) {
+        Ok(j) => Ok(s(&j["data"]["name"])),
+        Err(e) if e.to_string().contains("403") => Err(Error::other(format!(
+            "CurseForge не принял ключ (403). Нужен ключ из console.curseforge.com → API Keys — он начинается с «$2a$10$» и длиной около 60 символов. Сейчас: {} символов, начало «{}…»",
+            key.len(),
+            key.chars().take(7).collect::<String>()
+        ))),
+        Err(e) => Err(e),
+    }
 }
 
 fn cf_need_key(t: &Target) -> Result<()> {
@@ -910,6 +939,12 @@ pub fn names_similar(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cf_key_cleanup() {
+        assert_eq!(clean_cf_key(" \"$2a$10$abc\"\n"), "$2a$10$abc");
+        assert_eq!(clean_cf_key("x-api-key: $2a$10$abc\u{200b}"), "$2a$10$abc");
+    }
 
     #[test]
     fn similar_names() {

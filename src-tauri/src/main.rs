@@ -171,6 +171,7 @@ fn main() {
             commands::catalog_apply,
             commands::catalog_updates,
             commands::catalog_fix,
+            commands::check_cf_key,
             commands::analyze_logs,
             commands::save_compressed,
             commands::quarantine_mod,
