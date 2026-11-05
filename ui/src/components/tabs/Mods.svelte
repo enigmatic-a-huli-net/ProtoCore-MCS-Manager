@@ -1,6 +1,5 @@
 <script lang="ts">
   import { ask } from "@tauri-apps/plugin-dialog";
-  import { openPath } from "@tauri-apps/plugin-opener";
   import Icon from "../Icon.svelte";
   import Catalog from "./Catalog.svelte";
   import Updates from "./Updates.svelte";
@@ -152,7 +151,7 @@
       <button class="btn sm" onclick={() => removeClient(false)} title={t("mods.disableClient")}>
         <Icon name="shield" size={14} />{t("mods.disableClient")}
       </button>
-      <button class="btn ghost sm icon" title={t("act.openFolder")} onclick={() => openPath(`${server.path}/mods`).catch(fail)}>
+      <button class="btn ghost sm icon" title={t("act.openFolder")} onclick={() => api.openPath(`${server.path}${server.path.includes("\\") ? "\\" : "/"}mods`).catch(fail)}>
         <Icon name="folder" size={15} />
       </button>
       <button class="btn ghost sm icon" title={t("act.refresh")} onclick={load} disabled={loading}>

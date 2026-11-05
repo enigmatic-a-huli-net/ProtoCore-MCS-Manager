@@ -969,3 +969,22 @@ fn catalog_key(k: &str) -> String {
 pub async fn check_cf_key(key: String) -> R<String> {
     bg(move || pcm_core::catalog::check_cf_key(&key).map_err(e)).await
 }
+
+// ===================================================================== открыть папку / файл
+
+/// Открыть папку или файл в проводнике. `reveal` — показать файл выделенным в его папке.
+/// Делается на стороне ядра: так не нужен белый список путей у плагина открытия.
+#[tauri::command]
+pub fn open_path(app: AppHandle, path: String, reveal: bool) -> R<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let p = PathBuf::from(path.trim());
+    // папки mods/plugins могут ещё не существовать — создаём, чтобы было что открыть
+    if !reveal && !p.exists() && p.extension().is_none() {
+        std::fs::create_dir_all(&p).map_err(e)?;
+    }
+    if reveal {
+        app.opener().reveal_item_in_dir(&p).map_err(e)
+    } else {
+        app.opener().open_path(p.to_string_lossy(), None::<&str>).map_err(e)
+    }
+}

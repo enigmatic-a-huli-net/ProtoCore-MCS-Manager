@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { openPath } from "@tauri-apps/plugin-opener";
   import { ask } from "@tauri-apps/plugin-dialog";
   import Icon from "./Icon.svelte";
   import Console from "./tabs/Console.svelte";
@@ -86,7 +85,7 @@
       <div class="row muted sub">
         <span>{CORE_LABEL[server.core]} {server.loader_version}</span>
         <span>Minecraft {server.mc_version || "?"}</span>
-        <button class="path" onclick={() => openPath(server.path).catch(fail)} title={t("act.openFolder")}>
+        <button class="path" onclick={() => api.openPath(server.path).catch(fail)} title={t("act.openFolder")}>
           <Icon name="folder" size={13} />{server.path}
         </button>
       </div>

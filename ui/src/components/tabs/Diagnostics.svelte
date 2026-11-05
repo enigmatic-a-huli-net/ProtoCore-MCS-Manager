@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import Icon from "../Icon.svelte";
   import { api, type Analysis, type Culprit, type ServerEntry } from "../../lib/api";
   import { app, t, toast, fail } from "../../lib/store.svelte";
@@ -67,7 +66,7 @@
     try {
       const p = await api.saveCompressed(server.id, result.compressed);
       toast(t("dg.savedTo", { p }), "ok");
-      revealItemInDir(p).catch(() => {});
+      api.revealPath(p).catch(() => {});
     } catch (e) {
       fail(e);
     }

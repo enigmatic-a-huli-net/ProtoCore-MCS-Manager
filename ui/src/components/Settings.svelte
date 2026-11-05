@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { openPath } from "@tauri-apps/plugin-opener";
   import Icon from "./Icon.svelte";
   import { api, type Theme } from "../lib/api";
   import { app, t, toast, fail } from "../lib/store.svelte";
@@ -149,7 +148,7 @@
       <h3>{t("set.branding")}</h3>
       <p class="muted">{t("set.brandingText")}</p>
     </div>
-    <button type="button" class="btn sm" onclick={() => app.paths && openPath(app.paths.branding).catch(fail)}>
+    <button type="button" class="btn sm" onclick={() => app.paths && api.openPath(app.paths.branding).catch(fail)}>
       <Icon name="folder" size={14} />{t("set.openBranding")}
     </button>
   </section>

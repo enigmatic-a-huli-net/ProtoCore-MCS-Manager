@@ -1,6 +1,5 @@
 <script lang="ts">
   import { ask } from "@tauri-apps/plugin-dialog";
-  import { openPath } from "@tauri-apps/plugin-opener";
   import Icon from "../Icon.svelte";
   import { api, bytes, type ServerEntry, type Snapshot } from "../../lib/api";
   import { app, t, toast, fail, saveServer } from "../../lib/store.svelte";
@@ -148,7 +147,7 @@
         <div><span>{t("bk.size")}</span><b>{list ? bytes(list.repo_size) : "—"}</b></div>
         <div class="repo">
           <span>{t("bk.repo")}</span>
-          <button class="link mono" onclick={() => list && openPath(list.repo_path).catch(fail)}>{list?.repo_path ?? "—"}</button>
+          <button class="link mono" onclick={() => list && api.openPath(list.repo_path).catch(fail)}>{list?.repo_path ?? "—"}</button>
         </div>
       </div>
       <div class="row">

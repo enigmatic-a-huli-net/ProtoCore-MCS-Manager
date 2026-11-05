@@ -377,9 +377,11 @@ pub fn check_cf_key(key: &str) -> Result<String> {
     match net::get_json_h("https://api.curseforge.com/v1/games/432", &[("x-api-key", &key)]) {
         Ok(j) => Ok(s(&j["data"]["name"])),
         Err(e) if e.to_string().contains("403") => Err(Error::other(format!(
-            "CurseForge не принял ключ (403). Нужен ключ из console.curseforge.com → API Keys — он начинается с «$2a$10$» и длиной около 60 символов. Сейчас: {} символов, начало «{}…»",
+            "CurseForge не принял ключ (403). Нужен ключ из console.curseforge.com → API Keys — он начинается с «$2a$10$» и длиной около 60 символов. Сейчас: {} символов, начало «{}…», конец «…{}». Ответ сервера: {}",
             key.len(),
-            key.chars().take(7).collect::<String>()
+            key.chars().take(7).collect::<String>(),
+            key.chars().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect::<String>(),
+            e.to_string().rsplit("HTTP 403").next().unwrap_or("").trim()
         ))),
         Err(e) => Err(e),
     }
