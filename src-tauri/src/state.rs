@@ -141,6 +141,7 @@ fn on_crash(app: AppHandle, id: String, info: ExitInfo) {
                         *state.quarantine_rounds.lock().unwrap().entry(id.clone()).or_insert(0) += 1;
                         for m in &moved {
                             state.pm.system(&id, format!("🧪 Карантин: {} → mods_disabled ({})", m.name, m.reason));
+                            crate::commands::journal(&state, &id, "quarantine", format!("Автокарантин: {} — {}", m.file, m.reason));
                         }
                         let _ = app.emit("pcm://quarantine", QuarantineEvent { id: &id, mods: &moved });
                         if server.mods.quarantine_restart {

@@ -51,6 +51,10 @@ export interface ServerEntry {
     password: string;
     keep_last: number;
     excludes: string[];
+    copy_repo: string;
+    copy_env: string[];
+    copy_after_backup: boolean;
+    verify_weekly: boolean;
   };
   mods: {
     auto_disable_client: boolean;
@@ -207,6 +211,10 @@ export interface Snapshot {
   summary?: { data_added?: number; total_bytes_processed?: number; files_new?: number; files_changed?: number } | null;
 }
 
+export interface SnapEntry { name: string; rel: string; dir: boolean; size: number; mtime: string }
+export interface SnapDiff { added: string[]; removed: string[]; modified: string[] }
+export interface Change { ts: number; kind: string; text: string }
+
 export interface BackupResult { snapshot_id: string; files_new: number; files_changed: number; data_added: number; total_bytes: number; seconds: number }
 
 export interface BackupEvent {
@@ -255,6 +263,12 @@ export const api = {
   resticStatus: () => invoke<ResticStatus>("restic_status"),
   snapshots: (id: string) => invoke<{ snapshots: Snapshot[]; repo_path: string; repo_size: number }>("list_snapshots", { id }),
   backupNow: (id: string) => invoke<BackupResult>("backup_now", { id }),
+  snapshotLs: (id: string, snapshot: string, rel: string) => invoke<{ entries: SnapEntry[]; names: Record<string, string> }>("snapshot_ls", { id, snapshot, rel }),
+  snapshotRestore: (id: string, snapshot: string, rel: string, inPlace: boolean) => invoke<string>("snapshot_restore", { id, snapshot, rel, inPlace }),
+  snapshotDiff: (id: string, a: string, b: string) => invoke<SnapDiff>("snapshot_diff", { id, a, b }),
+  copyNow: (id: string) => invoke<void>("copy_now", { id }),
+  verifyRepo: (id: string) => invoke<string>("verify_repo", { id }),
+  getChanges: (id: string) => invoke<Change[]>("get_changes", { id }),
   deleteSnapshot: (id: string, snapshot: string) => invoke<void>("delete_snapshot", { id, snapshot }),
   rollback: (id: string, snapshot: string, startAfter: boolean) => invoke<void>("rollback", { id, snapshot, startAfter }),
   checkRepo: (id: string) => invoke<string>("check_repo", { id }),

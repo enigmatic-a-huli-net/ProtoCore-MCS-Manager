@@ -36,6 +36,23 @@ pub struct Snapshot {
     pub summary: Option<Value>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct Entry {
+    pub name: String,
+    /// путь относительно папки сервера, через «/»
+    pub rel: String,
+    pub dir: bool,
+    pub size: u64,
+    pub mtime: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Diff {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub modified: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct BackupResult {
     pub snapshot_id: String,
@@ -330,6 +347,171 @@ impl Repo {
         self.run(&["check".into()])
     }
 
+    /// Проверка с чтением части данных: ловит испорченные файлы репозитория на диске.
+    pub fn check_data(&self, percent: u32) -> Result<String> {
+        self.run(&["check".into(), format!("--read-data-subset={}%", percent.clamp(1, 100))])
+    }
+
+    /// Корень снапшота внутри restic (`/C/Servers/mc` для `C:\Servers\mc`).
+    pub fn snapshot_root(snap: &Snapshot) -> Result<String> {
+        snap.paths
+            .first()
+            .map(|p| restic_inner_path(p))
+            .ok_or_else(|| Error::Restic("в снапшоте нет пути".into()))
+    }
+
+    /// Содержимое папки в снапшоте. `rel` — путь относительно папки сервера ("" — корень).
+    pub fn ls(&self, snap: &Snapshot, rel: &str) -> Result<Vec<Entry>> {
+        let root = Self::snapshot_root(snap)?;
+        let rel = rel.trim_matches('/').replace('\\', "/");
+        let dir = if rel.is_empty() { root.clone() } else { format!("{root}/{rel}") };
+        let out = self.run(&["ls".into(), "--json".into(), snap.id.clone(), dir.clone()])?;
+        let mut v = Vec::new();
+        for line in out.lines() {
+            let Ok(n) = serde_json::from_str::<Value>(line) else { continue };
+            if n.get("struct_type").and_then(Value::as_str) != Some("node") {
+                continue;
+            }
+            let path = n.get("path").and_then(Value::as_str).unwrap_or("");
+            if path == dir {
+                continue; // сама папка
+            }
+            let Some(r) = path.strip_prefix(&format!("{root}/")) else { continue };
+            v.push(Entry {
+                name: n.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                rel: r.to_string(),
+                dir: n.get("type").and_then(Value::as_str) == Some("dir"),
+                size: n.get("size").and_then(Value::as_u64).unwrap_or(0),
+                mtime: n.get("mtime").and_then(Value::as_str).unwrap_or("").to_string(),
+            });
+        }
+        v.sort_by(|a, b| b.dir.cmp(&a.dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        Ok(v)
+    }
+
+    /// Восстановить один файл или папку из снапшота в `dest` (полный путь назначения).
+    /// Существующий `dest` заменяется.
+    pub fn restore_item(&self, snap: &Snapshot, rel: &str, dest: &Path) -> Result<()> {
+        let root = Self::snapshot_root(snap)?;
+        let rel = rel.trim_matches('/').replace('\\', "/");
+        if rel.is_empty() || rel.split('/').any(|p| p == "..") {
+            return Err(Error::other("недопустимый путь"));
+        }
+        let (parent, name) = match rel.rsplit_once('/') {
+            Some((p, n)) => (format!("{root}/{p}"), n.to_string()),
+            None => (root.clone(), rel.clone()),
+        };
+        let tmp = dest
+            .parent()
+            .ok_or_else(|| Error::other("нет папки назначения"))?
+            .join(format!(".pcm-restore-{}", crate::util::short_id()));
+        fs::create_dir_all(&tmp)?;
+        let res = self.run(&[
+            "restore".into(),
+            format!("{}:{parent}", snap.id),
+            "--target".into(),
+            tmp.to_string_lossy().to_string(),
+            "--include".into(),
+            format!("/{name}"),
+        ]);
+        let restored = tmp.join(&name);
+        let out = res.and_then(|_| {
+            if !restored.exists() {
+                return Err(Error::Restic(format!("в снапшоте нет «{rel}»")));
+            }
+            if dest.is_dir() {
+                fs::remove_dir_all(dest)?;
+            } else if dest.exists() {
+                fs::remove_file(dest)?;
+            }
+            if let Some(p) = dest.parent() {
+                fs::create_dir_all(p)?;
+            }
+            fs::rename(&restored, dest)?;
+            Ok(())
+        });
+        let _ = fs::remove_dir_all(&tmp);
+        out
+    }
+
+    /// Что изменилось между двумя снапшотами. Пути — относительно папки сервера.
+    pub fn diff(&self, a: &Snapshot, b: &Snapshot) -> Result<Diff> {
+        let out = self.run(&["diff".into(), "--json".into(), a.id.clone(), b.id.clone()])?;
+        let roots: Vec<String> = [a, b].iter().filter_map(|s| Self::snapshot_root(s).ok()).collect();
+        let mut d = Diff::default();
+        for line in out.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+            if v.get("message_type").and_then(Value::as_str) != Some("change") {
+                continue;
+            }
+            let p = v.get("path").and_then(Value::as_str).unwrap_or("");
+            // путь в diff бывает от корня диска или от последней папки — отрезаем любой из корней
+            let mut rel = p.trim_start_matches('/').to_string();
+            for r in &roots {
+                let base = r.rsplit('/').next().unwrap_or("");
+                if let Some(x) = p.strip_prefix(&format!("{r}/")) {
+                    rel = x.to_string();
+                    break;
+                }
+                if let Some(x) = p.strip_prefix(&format!("/{base}/")) {
+                    rel = x.to_string();
+                    break;
+                }
+            }
+            if rel.ends_with('/') {
+                continue;
+            }
+            match v.get("modifier").and_then(Value::as_str).unwrap_or("") {
+                "+" => d.added.push(rel),
+                "-" => d.removed.push(rel),
+                _ => d.modified.push(rel),
+            }
+        }
+        Ok(d)
+    }
+
+    /// Скопировать снапшоты во второе хранилище (создаёт его при первом запуске).
+    pub fn copy_to(&self, dest: &str, env: &[String], keep_last: u32) -> Result<String> {
+        let mk = |args: &[&str]| -> Command {
+            let mut c = Command::new(&self.restic);
+            c.env("RESTIC_REPOSITORY", dest)
+                .env("RESTIC_PASSWORD", &self.password)
+                .env("RESTIC_FROM_REPOSITORY", &self.repo)
+                .env("RESTIC_FROM_PASSWORD", &self.password)
+                .env("RESTIC_CACHE_DIR", self.repo.join(".cache"))
+                .stdin(Stdio::null())
+                .args(args);
+            for kv in env {
+                if let Some((k, v)) = kv.split_once('=') {
+                    if !k.trim().is_empty() {
+                        c.env(k.trim(), v.trim());
+                    }
+                }
+            }
+            hidden(&mut c);
+            c
+        };
+        let run = |args: &[&str]| -> Result<String> {
+            let out = mk(args).output()?;
+            if !out.status.success() {
+                return Err(Error::Restic(String::from_utf8_lossy(&out.stderr).trim().to_string()));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        };
+        // есть ли хранилище? нет — создаём с теми же параметрами нарезки (так работает дедупликация)
+        if run(&["cat", "config"]).is_err() {
+            if !dest.contains(':') || dest.len() > 2 && dest.as_bytes()[1] == b':' {
+                fs::create_dir_all(dest)?;
+            }
+            run(&["init", "--copy-chunker-params"])?;
+        }
+        let out = run(&["copy"])?;
+        if keep_last > 0 {
+            let _ = run(&["forget", "--keep-last", &keep_last.to_string(), "--prune"]);
+        }
+        Ok(out)
+    }
+
     /// Восстанавливает снапшот в папку сервера.
     /// Файлы, которых не было в снапшоте, удаляются (`--delete`), кроме исключённых.
     pub fn restore(&self, snap: &Snapshot, server_dir: &Path, excludes: &[String]) -> Result<()> {
@@ -454,6 +636,58 @@ mod tests {
     fn bytes() {
         assert_eq!(human_bytes(512), "512 Б");
         assert_eq!(human_bytes(1536), "1.5 КБ");
+    }
+
+    /// Просмотр снапшота, точечное восстановление, сравнение и копия во второе хранилище.
+    #[test]
+    fn browse_restore_diff_copy_if_available() {
+        let t = tempfile::tempdir().unwrap();
+        let paths = AppPaths::from_base(t.path().join("mgr"));
+        if find_restic(&paths).is_none() {
+            return;
+        }
+        let srv = t.path().join("srv");
+        fs::create_dir_all(srv.join("world/playerdata")).unwrap();
+        fs::create_dir_all(srv.join("mods")).unwrap();
+        fs::write(srv.join("world/playerdata/u1.dat"), "inv-v1").unwrap();
+        fs::write(srv.join("mods/a.jar"), "a").unwrap();
+        let mut s = ServerEntry { id: "b1".into(), name: "B".into(), path: srv.to_string_lossy().into(), ..Default::default() };
+        s.backup.password = "pw".into();
+        let repo = Repo::for_server(&paths, &s).unwrap();
+        repo.backup(&srv, &[], &["t"], |_| {}).unwrap();
+        fs::write(srv.join("world/playerdata/u1.dat"), "inv-griefed").unwrap();
+        fs::remove_file(srv.join("mods/a.jar")).unwrap();
+        fs::write(srv.join("mods/b.jar"), "b").unwrap();
+        repo.backup(&srv, &[], &["t"], |_| {}).unwrap();
+        let snaps = repo.snapshots().unwrap(); // новые первыми
+        let (new, old) = (&snaps[0], &snaps[1]);
+
+        let root = repo.ls(old, "").unwrap();
+        assert!(root.iter().any(|e| e.name == "world" && e.dir));
+        let pd = repo.ls(old, "world/playerdata").unwrap();
+        assert_eq!(pd.len(), 1);
+        assert_eq!(pd[0].rel, "world/playerdata/u1.dat");
+
+        // точечно вернуть инвентарь
+        repo.restore_item(old, "world/playerdata/u1.dat", &srv.join("world/playerdata/u1.dat")).unwrap();
+        assert_eq!(fs::read_to_string(srv.join("world/playerdata/u1.dat")).unwrap(), "inv-v1");
+        // папку — в отдельное место
+        repo.restore_item(old, "mods", &srv.join("restored/x/mods")).unwrap();
+        assert!(srv.join("restored/x/mods/a.jar").exists());
+        assert!(srv.join("mods/b.jar").exists());
+
+        let d = repo.diff(old, new).unwrap();
+        assert!(d.added.contains(&"mods/b.jar".to_string()), "{d:?}");
+        assert!(d.removed.contains(&"mods/a.jar".to_string()));
+        assert!(d.modified.contains(&"world/playerdata/u1.dat".to_string()));
+
+        let dest = t.path().join("second");
+        repo.copy_to(&dest.to_string_lossy(), &[], 0).unwrap();
+        let mut s2 = s.clone();
+        s2.backup.repo_path = String::new();
+        let r2 = Repo { restic: repo.restic.clone(), repo: dest.clone(), password: "pw".into() };
+        assert_eq!(r2.snapshots().unwrap().len(), 2);
+        assert!(repo.check_data(5).is_ok());
     }
 
     /// Полный цикл, если restic установлен в системе: снапшот → изменение → откат.

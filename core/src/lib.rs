@@ -21,6 +21,7 @@ pub mod analyze;
 pub mod backup;
 pub mod bisect;
 pub mod catalog;
+pub mod changes;
 pub mod config;
 pub mod cores;
 pub mod detect;

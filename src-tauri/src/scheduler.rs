@@ -287,6 +287,28 @@ fn tick(app: &AppHandle) {
                 st.pm.system(&id, "🌙 Ночной бэкап…");
                 if let Err(e) = crate::commands::backup_blocking(&app2, &id, "nightly") {
                     st.pm.system(&id, format!("✖ Ночной бэкап не удался: {e}"));
+                    return;
+                }
+                let srv = st.config.lock().unwrap().server(&id).cloned();
+                let Some(srv) = srv else { return };
+                if srv.backup.copy_after_backup && !srv.backup.copy_repo.trim().is_empty() {
+                    let _ = crate::commands::copy_blocking(&app2, &id);
+                }
+                // по воскресеньям — проверка, что данные снапшотов читаются
+                use chrono::Datelike;
+                if srv.backup.verify_weekly && chrono::Local::now().weekday() == chrono::Weekday::Sun {
+                    st.pm.system(&id, "🔎 Еженедельная проверка снапшотов…");
+                    let r = pcm_core::backup::Repo::for_server(&st.paths, &srv).and_then(|r| r.check_data(5));
+                    match r {
+                        Ok(_) => {
+                            st.pm.system(&id, "🔎 Снапшоты в порядке");
+                            crate::commands::journal(&st, &id, "backup", "Еженедельная проверка снапшотов: ошибок нет");
+                        }
+                        Err(e) => {
+                            st.pm.system(&id, format!("✖ Проверка снапшотов нашла ошибку: {e}"));
+                            crate::social::notify(&app2, &format!("verify:{id}"), Duration::from_secs(86_400), format!("🛑 Снапшоты «{}» повреждены: {e}", srv.name));
+                        }
+                    }
                 }
             });
         }

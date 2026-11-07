@@ -227,3 +227,4 @@ input[type="color"] { width: 2.35em; height: 2.35em; padding: 2px; border: 1px s
 .modal .actions { display: flex; justify-content: flex-end; gap: 8px; }
 @keyframes fade { from { opacity: 0; } }
 @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
+.modal.wide { width: min(820px, calc(100vw - 40px)); }

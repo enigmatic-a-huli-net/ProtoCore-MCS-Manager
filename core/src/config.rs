@@ -185,6 +185,15 @@ pub struct BackupSettings {
     pub keep_last: u32,
     /// Что не включать в снапшот (шаблоны restic, относительно папки сервера)
     pub excludes: Vec<String>,
+    /// Второе хранилище (правило 3-2-1): папка на другом диске, `sftp:user@host:/path`,
+    /// `s3:…`, `b2:…`, `rclone:…` — всё, что понимает restic. Пусто — без копии.
+    pub copy_repo: String,
+    /// Переменные окружения для второго хранилища (ключи S3/B2 и т. п.), по строке «KEY=VALUE»
+    pub copy_env: Vec<String>,
+    /// Копировать после каждого ночного бэкапа
+    pub copy_after_backup: bool,
+    /// Раз в неделю проверять, что данные снапшотов читаются (5% данных)
+    pub verify_weekly: bool,
 }
 
 impl Default for BackupSettings {
@@ -200,7 +209,12 @@ impl Default for BackupSettings {
                 "session.lock".into(),
                 "*.tmp".into(),
                 ".cache".into(),
+                "restored".into(),
             ],
+            copy_repo: String::new(),
+            copy_env: vec![],
+            copy_after_backup: true,
+            verify_weekly: true,
         }
     }
 }

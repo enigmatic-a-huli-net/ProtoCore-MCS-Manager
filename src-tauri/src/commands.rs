@@ -28,6 +28,19 @@ async fn bg<T: Send + 'static>(f: impl FnOnce() -> R<T> + Send + 'static) -> R<T
     tauri::async_runtime::spawn_blocking(f).await.map_err(e)?
 }
 
+/// Запись в журнал изменений сервера.
+pub fn journal(state: &AppState, id: &str, kind: &str, text: impl Into<String>) {
+    let _ = pcm_core::changes::record(&state.paths.data, id, kind, text);
+}
+
+fn on_off(enabled: bool) -> &'static str {
+    if enabled {
+        "Включён"
+    } else {
+        "Выключен"
+    }
+}
+
 fn server_of(state: &AppState, id: &str) -> R<ServerEntry> {
     state
         .config
@@ -231,6 +244,7 @@ pub fn update_server(state: State<AppState>, server: ServerEntry) -> R<ServerEnt
     let mut c = state.config.lock().unwrap();
     let s = c.server_mut(&server.id).ok_or("сервер не найден")?;
     let password = s.backup.password.clone();
+    let before = s.clone();
     *s = server;
     if s.backup.password.is_empty() {
         s.backup.password = password; // пароль из интерфейса не приходит пустым по ошибке
@@ -238,6 +252,26 @@ pub fn update_server(state: State<AppState>, server: ServerEntry) -> R<ServerEnt
     let out = s.clone();
     drop(c);
     state.save()?;
+    // что поменялось в важных настройках
+    let mut what = Vec::new();
+    if before.launch.memory_mb != out.launch.memory_mb {
+        what.push(format!("память {} → {} МБ", before.launch.memory_mb, out.launch.memory_mb));
+    }
+    if before.launch.jvm_preset != out.launch.jvm_preset || before.launch.extra_jvm_args != out.launch.extra_jvm_args {
+        what.push("флаги JVM".to_string());
+    }
+    if before.launch.java_path != out.launch.java_path {
+        what.push("путь к Java".to_string());
+    }
+    if before.launch.mode != out.launch.mode || before.launch.script != out.launch.script {
+        what.push("способ запуска".to_string());
+    }
+    if before.core != out.core || before.mc_version != out.mc_version {
+        what.push(format!("ядро/версия: {} {}", out.core.label(), out.mc_version));
+    }
+    if !what.is_empty() {
+        journal(&state, &out.id, "settings", format!("Настройки запуска: {}", what.join(", ")));
+    }
     Ok(out)
 }
 
@@ -285,7 +319,10 @@ pub fn read_properties(state: State<AppState>, id: String) -> R<Vec<(String, Str
 #[tauri::command]
 pub fn write_properties(state: State<AppState>, id: String, changes: Vec<(String, String)>) -> R<()> {
     let s = server_of(&state, &id)?;
-    props::write(&s.dir(), &changes).map_err(e)
+    props::write(&s.dir(), &changes).map_err(e)?;
+    let list = changes.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(", ");
+    journal(&state, &id, "props", format!("server.properties: {list}"));
+    Ok(())
 }
 
 // ===================================================================== процесс
@@ -351,6 +388,7 @@ fn start_inner(app: &AppHandle, id: &str, allow_snapshot: bool) -> R<()> {
             Ok(moved) if !moved.is_empty() => {
                 for m in &moved {
                     state.pm.system(id, format!("🧹 Клиентский мод отключён: {} ({})", m.name, m.reason));
+                    journal(&state, id, "mods", format!("Перед запуском убран клиентский мод: {}", m.file));
                 }
             }
             Ok(_) => {}
@@ -479,7 +517,9 @@ pub async fn set_mod_enabled(app: AppHandle, id: String, file: String, enabled: 
     bg(move || {
         let state = app.state::<AppState>();
         let s = server_of(&state, &id)?;
-        mods::set_enabled(&s.dir(), &file, enabled, "user", "").map(|_| ()).map_err(e)
+        mods::set_enabled(&s.dir(), &file, enabled, "user", "").map_err(e)?;
+        journal(&state, &id, "mods", format!("{} мод: {file}", on_off(enabled)));
+        Ok(())
     })
     .await
 }
@@ -489,9 +529,10 @@ pub async fn set_mods_enabled(app: AppHandle, id: String, files: Vec<String>, en
     bg(move || {
         let state = app.state::<AppState>();
         let s = server_of(&state, &id)?;
-        for f in files {
-            mods::set_enabled(&s.dir(), &f, enabled, "user", "").map_err(e)?;
+        for f in &files {
+            mods::set_enabled(&s.dir(), f, enabled, "user", "").map_err(e)?;
         }
+        journal(&state, &id, "mods", format!("{} моды ({}): {}", if enabled { "Включены" } else { "Выключены" }, files.len(), files.join(", ")));
         Ok(())
     })
     .await
@@ -502,7 +543,11 @@ pub async fn disable_client_mods(app: AppHandle, id: String, include_likely: boo
     bg(move || {
         let state = app.state::<AppState>();
         let s = server_of(&state, &id)?;
-        mods::disable_client_mods(&s.dir(), s.core.mod_loader(), &s.mods, include_likely).map_err(e)
+        let moved = mods::disable_client_mods(&s.dir(), s.core.mod_loader(), &s.mods, include_likely).map_err(e)?;
+        if !moved.is_empty() {
+            journal(&state, &id, "mods", format!("Убраны клиентские моды: {}", moved.iter().map(|m| m.file.clone()).collect::<Vec<_>>().join(", ")));
+        }
+        Ok(moved)
     })
     .await
 }
@@ -522,7 +567,9 @@ pub async fn set_plugin_enabled(app: AppHandle, id: String, file: String, enable
     bg(move || {
         let state = app.state::<AppState>();
         let s = server_of(&state, &id)?;
-        plugins::set_enabled(&s.dir(), &file, enabled, "user").map(|_| ()).map_err(e)
+        plugins::set_enabled(&s.dir(), &file, enabled, "user").map_err(e)?;
+        journal(&state, &id, "plugins", format!("{} плагин: {file}", on_off(enabled)));
+        Ok(())
     })
     .await
 }
@@ -614,6 +661,7 @@ pub async fn rollback(app: AppHandle, id: String, snapshot: String, start_after:
         repo.restore(&snap, &s.dir(), &s.backup.excludes).map_err(e)?;
         emit_backup(&app, &id, "restored", None, snap.short_id.clone());
         state.pm.system(&id, "✔ Откат завершён");
+        journal(&state, &id, "backup", format!("Откат к снапшоту {} от {}", snap.short_id, snap.time.chars().take(16).collect::<String>()));
         if start_after || was_running {
             // свежий снапшот только что сделан — повторный при запуске не нужен
             start_inner(&app, &id, false)?;
@@ -742,7 +790,9 @@ pub async fn quarantine_mod(app: AppHandle, id: String, file: String, reason: St
     bg(move || {
         let state = app.state::<AppState>();
         let s = server_of(&state, &id)?;
-        mods::set_enabled(&s.dir(), &file, false, "crash", &reason).map(|_| ()).map_err(e)
+        mods::set_enabled(&s.dir(), &file, false, "crash", &reason).map_err(e)?;
+        journal(&state, &id, "quarantine", format!("В карантин: {file} — {reason}"));
+        Ok(())
     })
     .await
 }
@@ -889,6 +939,7 @@ pub async fn update_core(app: AppHandle, id: String, build: String) -> R<ServerE
         }
         state.save()?;
         state.pm.system(&id, format!("⬆ Ядро обновлено: {} {}", s2.core.label(), s2.loader_version));
+        journal(&state, &id, "core", format!("Ядро обновлено: {} {} → {}", s.core.label(), s.loader_version, s2.loader_version));
         log("✔ Готово".into());
         Ok(s2)
     })
@@ -958,6 +1009,15 @@ pub async fn catalog_apply(app: AppHandle, id: String, kind: Kind, plan: Plan) -
         .map_err(e)?;
         for f in &files {
             state.pm.system(&id, format!("⬇ Установлено: {f}"));
+        }
+        if !files.is_empty() {
+            let replaced: Vec<String> = plan.items.iter().filter_map(|i| i.replaces.clone()).collect();
+            let kind_s = if matches!(kind, Kind::Mod) { "mods" } else { "plugins" };
+            let mut text = format!("Установлено: {}", files.join(", "));
+            if !replaced.is_empty() {
+                text.push_str(&format!(" (заменены: {})", replaced.join(", ")));
+            }
+            journal(&state, &id, kind_s, text);
         }
         Ok(files)
     })
@@ -1383,4 +1443,127 @@ pub async fn notify_test(settings: pcm_core::notify::NotifySettings) -> R<String
         Ok(ok.join(", "))
     })
     .await
+}
+
+// ===================================================================== снапшоты: просмотр, точечное восстановление, сравнение, копия
+
+fn find_snapshot(repo: &Repo, snap: &str) -> R<Snapshot> {
+    repo.snapshots()
+        .map_err(e)?
+        .into_iter()
+        .find(|x| x.id == snap || x.short_id == snap)
+        .ok_or_else(|| "снапшот не найден".to_string())
+}
+
+#[derive(Serialize)]
+pub struct LsOut {
+    entries: Vec<backup::Entry>,
+    /// uuid → имя игрока (для папки playerdata)
+    names: HashMap<String, String>,
+}
+
+#[tauri::command]
+pub async fn snapshot_ls(app: AppHandle, id: String, snapshot: String, rel: String) -> R<LsOut> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        let repo = Repo::for_server(&state.paths, &s).map_err(e)?;
+        let snap = find_snapshot(&repo, &snapshot)?;
+        let entries = repo.ls(&snap, &rel).map_err(e)?;
+        let names = pcm_core::players::lists(&s.dir()).known.into_iter().map(|(n, u)| (u, n)).collect();
+        Ok(LsOut { entries, names })
+    })
+    .await
+}
+
+/// Вернуть файл или папку из снапшота: на место (сервер должен быть остановлен,
+/// перед этим делается снапшот текущего состояния) или рядом, в папку restored/.
+#[tauri::command]
+pub async fn snapshot_restore(app: AppHandle, id: String, snapshot: String, rel: String, in_place: bool) -> R<String> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let _g = BusyGuard::acquire(&state, &id)?;
+        let s = server_of(&state, &id)?;
+        let repo = Repo::for_server(&state.paths, &s).map_err(e)?;
+        let snap = find_snapshot(&repo, &snapshot)?;
+        let rel = rel.trim_matches('/').to_string();
+        let dest = if in_place {
+            if state.pm.is_running(&id) {
+                return Err("останови сервер: на работающем сервере он перезапишет восстановленные файлы".into());
+            }
+            snapshot_with_events(&app, &s, "pre-restore")?;
+            s.dir().join(&rel)
+        } else {
+            s.dir().join("restored").join(&snap.short_id).join(&rel)
+        };
+        repo.restore_item(&snap, &rel, &dest).map_err(e)?;
+        let where_ = if in_place { "на место".to_string() } else { format!("в restored/{}", snap.short_id) };
+        state.pm.system(&id, format!("⏪ Восстановлено из {}: {rel} ({where_})", snap.short_id));
+        journal(&state, &id, "backup", format!("Восстановлено из снапшота {}: {rel} ({where_})", snap.short_id));
+        Ok(dest.to_string_lossy().to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn snapshot_diff(app: AppHandle, id: String, a: String, b: String) -> R<backup::Diff> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        let repo = Repo::for_server(&state.paths, &s).map_err(e)?;
+        let (sa, sb) = (find_snapshot(&repo, &a)?, find_snapshot(&repo, &b)?);
+        repo.diff(&sa, &sb).map_err(e)
+    })
+    .await
+}
+
+pub fn copy_blocking(app: &AppHandle, id: &str) -> R<()> {
+    let state = app.state::<AppState>();
+    let s = server_of(&state, id)?;
+    if s.backup.copy_repo.trim().is_empty() {
+        return Err("второе хранилище не настроено".into());
+    }
+    let repo = Repo::for_server(&state.paths, &s).map_err(e)?;
+    state.pm.system(id, "📤 Копия снапшотов во второе хранилище…");
+    match repo.copy_to(s.backup.copy_repo.trim(), &s.backup.copy_env, s.backup.keep_last) {
+        Ok(_) => {
+            state.pm.system(id, "📤 Копия готова");
+            Ok(())
+        }
+        Err(err) => {
+            state.pm.system(id, format!("✖ Копия не удалась: {err}"));
+            if state.config.lock().unwrap().notify.on_backup_fail {
+                crate::social::notify(app, &format!("copy:{id}"), Duration::from_secs(3600), format!("⚠ Копия снапшотов «{}» во второе хранилище не удалась: {err}", s.name));
+            }
+            Err(err.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn copy_now(app: AppHandle, id: String) -> R<()> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let _g = BusyGuard::acquire(&state, &id)?;
+        drop(_g);
+        copy_blocking(&app, &id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn verify_repo(app: AppHandle, id: String) -> R<String> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        let out = Repo::for_server(&state.paths, &s).map_err(e)?.check_data(5).map_err(e)?;
+        journal(&state, &id, "backup", "Проверка снапшотов (5% данных): ошибок нет");
+        Ok(out)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn get_changes(state: State<AppState>, id: String) -> Vec<pcm_core::changes::Change> {
+    pcm_core::changes::recent(&state.paths.data, &id, 300)
 }
