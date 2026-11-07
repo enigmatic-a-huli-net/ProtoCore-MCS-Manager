@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
-  import { api, type Theme } from "../lib/api";
+  import { api, DEFAULT_NOTIFY, type NotifySettings, type Theme } from "../lib/api";
   import { app, t, toast, fail } from "../lib/store.svelte";
   import { applyTheme, ACCENTS, DEFAULT_THEME } from "../lib/theme";
   import { logo } from "../lib/brand";
@@ -14,6 +14,19 @@
   let cfKey = $state(c.curseforge_key ?? "");
   let serversRoot = $state(c.servers_root ?? "");
   let netmon = $state(c.network_monitor ?? true);
+  let nt = $state<NotifySettings>({ ...DEFAULT_NOTIFY, ...(c.notify ?? {}) });
+  let testing = $state(false);
+  async function testNotify() {
+    testing = true;
+    try {
+      const ok = await api.notifyTest($state.snapshot(nt) as NotifySettings);
+      toast(t("nt.testOk", { ok }), "ok");
+    } catch (e) {
+      fail(e);
+    } finally {
+      testing = false;
+    }
+  }
 
   // предпросмотр темы сразу, без сохранения
   $effect(() => applyTheme($state.snapshot(theme) as Theme));
@@ -33,7 +46,7 @@
 
   async function save() {
     try {
-      const settings = { language: lang, theme: $state.snapshot(theme) as Theme, close_to_tray: tray, console_lines: Number(lines), check_updates: checkUpdates, curseforge_key: cfKey, servers_root: serversRoot, network_monitor: netmon };
+      const settings = { language: lang, theme: $state.snapshot(theme) as Theme, close_to_tray: tray, console_lines: Number(lines), check_updates: checkUpdates, curseforge_key: cfKey, servers_root: serversRoot, network_monitor: netmon, notify: $state.snapshot(nt) as NotifySettings };
       await api.saveSettings(settings);
       Object.assign(app.config!, settings);
       toast(t("set.saved"), "ok");
@@ -144,6 +157,31 @@
     <label class="field narrow"><span>{t("set.lines")}</span><input type="number" min="500" max="50000" step="500" bind:value={lines} /></label>
   </section>
 
+  <section class="panel">
+    <h3>{t("nt.title")}</h3>
+    <p class="muted small" style="margin:0">{t("nt.text")}</p>
+    <div class="grid">
+      <label class="field"><span>{t("nt.tgToken")}</span><input type="password" bind:value={nt.telegram_token} autocomplete="off" placeholder="123456:ABC…" /></label>
+      <label class="field"><span>{t("nt.tgChat")}</span><input bind:value={nt.telegram_chat} placeholder="123456789" /></label>
+    </div>
+    <p class="muted small" style="margin:0">{t("nt.tgTokenHint")} {t("nt.tgChatHint")}</p>
+    <label class="check"><input type="checkbox" bind:checked={nt.telegram_bot} disabled={!nt.telegram_token || !nt.telegram_chat} />{t("nt.bot")}</label>
+    <label class="field"><span>{t("nt.discord")}</span><input type="password" bind:value={nt.discord_webhook} autocomplete="off" placeholder="https://discord.com/api/webhooks/…" /></label>
+    <p class="muted small" style="margin:0">{t("nt.discordHint")}</p>
+    <span class="muted small">{t("nt.events")}</span>
+    <div class="events">
+      <label class="check"><input type="checkbox" bind:checked={nt.on_crash} />{t("nt.crash")}</label>
+      <label class="check"><input type="checkbox" bind:checked={nt.on_backup_fail} />{t("nt.backupFail")}</label>
+      <label class="check"><input type="checkbox" bind:checked={nt.on_start} />{t("nt.start")}</label>
+      <label class="check"><input type="checkbox" bind:checked={nt.on_stop} />{t("nt.stop")}</label>
+      <label class="check"><input type="checkbox" bind:checked={nt.on_join} />{t("nt.join")}</label>
+      <label class="check"><input type="checkbox" bind:checked={nt.on_net_bad} />{t("nt.net")}</label>
+      <label class="check num"><input type="checkbox" bind:checked={nt.on_low_tps} />{t("nt.lowTps")} <input type="number" min="5" max="19" step="1" bind:value={nt.low_tps} /></label>
+      <label class="check num"><input type="checkbox" bind:checked={nt.on_disk_low} />{t("nt.disk")} <input type="number" min="1" max="500" bind:value={nt.disk_low_gb} /></label>
+    </div>
+    <div><button type="button" class="btn sm" disabled={testing || (!nt.telegram_token && !nt.discord_webhook)} onclick={testNotify}><Icon name="chevron" size={13} />{t("nt.test")}</button></div>
+  </section>
+
   <section class="panel brand">
     <img src={logo()} alt="" width="56" height="56" />
     <div class="grow">
@@ -174,6 +212,8 @@
   .swatch.on { border-color: var(--text); }
   .colors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .narrow { max-width: 220px; }
+  .events { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
+  .num input[type="number"] { width: 4.5em; height: 1.8em; margin-left: 4px; }
   input[type="range"] { accent-color: var(--accent); height: auto; padding: 0; border: 0; background: none; }
   .brand { display: flex; align-items: center; gap: 16px; }
   .brand p { margin: 4px 0 0; font-size: 0.9em; }

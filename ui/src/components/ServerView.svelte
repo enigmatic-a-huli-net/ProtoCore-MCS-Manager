@@ -11,6 +11,7 @@
   import Properties from "./tabs/Properties.svelte";
   import Schedule from "./tabs/Schedule.svelte";
   import Network from "./tabs/Network.svelte";
+  import Players from "./tabs/Players.svelte";
   import Optimize from "./tabs/Optimize.svelte";
   import { api, bytes, CORE_LABEL, supportsMods, supportsPlugins, type Metrics, type ServerEntry } from "../lib/api";
   import { app, status, t, fail, startServer, type Tab } from "../lib/store.svelte";
@@ -58,6 +59,7 @@
   const tabs = $derived(
     [
       { id: "console", icon: "terminal", show: true },
+      { id: "players", icon: "user", show: server.core !== "unknown" },
       { id: "network", icon: "link", show: true },
       { id: "diag", icon: "alert", show: true },
       { id: "mods", icon: "puzzle", show: supportsMods(server.core) || server.core === "unknown" },
@@ -150,6 +152,7 @@
     {#if app.tab === "console"}<Console {server} />
     {:else if app.tab === "diag"}<Diagnostics {server} />
     {:else if app.tab === "network"}<Network {server} />
+    {:else if app.tab === "players"}<Players {server} />
     {:else if app.tab === "mods"}<Mods {server} />
     {:else if app.tab === "plugins"}<Plugins {server} />
     {:else if app.tab === "backups"}<Backups {server} />

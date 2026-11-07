@@ -12,6 +12,7 @@ mod bisect_run;
 mod commands;
 mod netmon;
 mod scheduler;
+mod social;
 mod state;
 
 use std::collections::HashSet;
@@ -87,6 +88,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(scheduler::Sched::default())
         .manage(netmon::NetMon::default())
+        .manage(social::Social::default())
         .manage(bisect_run::BisectState::default())
         .manage(AppState {
             paths,
@@ -101,6 +103,7 @@ fn main() {
             let _ = sink.app.set(app.handle().clone());
             scheduler::start(app.handle().clone());
             netmon::start(app.handle().clone());
+            social::start_bot(app.handle().clone());
 
             let open = MenuItem::with_id(app, "open", "Открыть / Open", true, None::<&str>)?;
             let exit = MenuItem::with_id(app, "quit", "Выход / Quit", true, None::<&str>)?;
@@ -196,6 +199,9 @@ fn main() {
             commands::get_advice,
             commands::net_report,
             commands::modpack_inspect,
+            commands::players_info,
+            commands::player_action,
+            commands::notify_test,
             commands::modpack_import,
             commands::modpack_export,
             commands::connect_info,

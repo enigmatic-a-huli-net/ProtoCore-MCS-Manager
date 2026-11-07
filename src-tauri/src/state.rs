@@ -80,18 +80,21 @@ impl EventSink for TauriSink {
     fn log(&self, id: &str, lines: &[LogLine]) {
         if let Some(app) = self.app.get() {
             let _ = app.emit("pcm://log", LogEvent { id, lines });
+            crate::social::on_log(app, id, lines);
         }
     }
 
     fn status(&self, id: &str, info: &StatusInfo) {
         if let Some(app) = self.app.get() {
             let _ = app.emit("pcm://status", StatusEvent { id, info });
+            crate::social::on_status(app, id, info);
         }
     }
 
     fn exited(&self, id: &str, info: &ExitInfo) {
         let Some(app) = self.app.get() else { return };
         let _ = app.emit("pcm://exited", ExitEvent { id, info });
+        crate::social::on_exit(app, id, info);
         if info.crashed {
             on_crash(app.clone(), id.to_string(), info.clone());
         }

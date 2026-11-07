@@ -90,6 +90,7 @@ export interface Config {
   curseforge_key: string;
   servers_root: string;
   network_monitor: boolean;
+  notify: NotifySettings;
   selected: string;
   servers: ServerEntry[];
 }
@@ -217,7 +218,7 @@ export interface BackupEvent {
 
 export const api = {
   state: () => invoke<AppSnapshot>("get_state"),
-  saveSettings: (settings: Pick<Config, "language" | "theme" | "close_to_tray" | "console_lines" | "check_updates" | "curseforge_key" | "servers_root" | "network_monitor">) =>
+  saveSettings: (settings: Pick<Config, "language" | "theme" | "close_to_tray" | "console_lines" | "check_updates" | "curseforge_key" | "servers_root" | "network_monitor" | "notify">) =>
     invoke<void>("save_settings", { settings }),
   branding: () => invoke<{ logo: string | null; splash: string | null }>("get_branding"),
 
@@ -296,6 +297,10 @@ export const api = {
   packImport: (req: { pack: string; name: string; dir: string; memory_mb: number; java_path: string; accept_eula: boolean }) =>
     invoke<{ server: ServerEntry; result: ImportResult }>("modpack_import", { req }),
   packExport: (id: string, path: string, includeConfig: boolean) => invoke<ExportResult>("modpack_export", { id, path, includeConfig }),
+
+  playersInfo: (id: string) => invoke<PlayersInfo>("players_info", { id }),
+  playerAction: (id: string, action: string, name: string, reason = "") => invoke<void>("player_action", { id, action, name, reason }),
+  notifyTest: (settings: NotifySettings) => invoke<string>("notify_test", { settings }),
 
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
@@ -457,3 +462,38 @@ export interface ConnectInfo {
 export interface PackInfo { format: "modrinth" | "curseforge"; name: string; version: string; mc: string; core: CoreKind; loader_version: string; files: number; server_files: number; client_only: number; needs_cf_key: boolean }
 export interface ImportResult { downloaded: number; skipped_client: number; overrides: number; manual: [string, string][]; failed: string[] }
 export interface ExportResult { path: string; linked: number; embedded: number; client_added: number; server_only: number; size: number }
+
+export interface NotifySettings {
+  telegram_token: string;
+  telegram_chat: string;
+  telegram_bot: boolean;
+  discord_webhook: string;
+  on_crash: boolean;
+  on_start: boolean;
+  on_stop: boolean;
+  on_low_tps: boolean;
+  low_tps: number;
+  on_backup_fail: boolean;
+  on_disk_low: boolean;
+  disk_low_gb: number;
+  on_join: boolean;
+  on_net_bad: boolean;
+}
+export const DEFAULT_NOTIFY: NotifySettings = {
+  telegram_token: "", telegram_chat: "", telegram_bot: false, discord_webhook: "",
+  on_crash: true, on_start: false, on_stop: false, on_low_tps: true, low_tps: 15,
+  on_backup_fail: true, on_disk_low: true, disk_low_gb: 5, on_join: false, on_net_bad: false,
+};
+
+export interface PlayerRow {
+  name: string; online: boolean; op: boolean; whitelisted: boolean; banned: boolean;
+  first_seen: number; last_seen: number; total_secs: number; sessions: number; ips: string[]; online_since: number;
+}
+export interface PlayersInfo {
+  running: boolean;
+  rows: PlayerRow[];
+  lists: { ops: string[]; whitelist: string[]; banned: [string, string][]; banned_ips: [string, string][]; whitelist_on: boolean; known: Record<string, string> };
+  shared_ips: [string, string[]][];
+  chat: { ts: number; name: string; msg: string }[];
+  audit: { ts: number; cmd: string; by: string }[];
+}

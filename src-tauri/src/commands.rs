@@ -81,6 +81,8 @@ pub struct AppSettings {
     servers_root: String,
     #[serde(default = "yes")]
     network_monitor: bool,
+    #[serde(default)]
+    notify: Option<pcm_core::notify::NotifySettings>,
 }
 
 fn yes() -> bool {
@@ -99,6 +101,12 @@ pub fn save_settings(state: State<AppState>, settings: AppSettings) -> R<()> {
         c.curseforge_key = catalog_key(&settings.curseforge_key);
         c.servers_root = settings.servers_root.trim().to_string();
         c.network_monitor = settings.network_monitor;
+        if let Some(mut n) = settings.notify {
+            n.telegram_token = n.telegram_token.trim().to_string();
+            n.telegram_chat = n.telegram_chat.trim().to_string();
+            n.discord_webhook = n.discord_webhook.trim().to_string();
+            c.notify = n;
+        }
     }
     state.save()
 }
@@ -315,7 +323,12 @@ fn snapshot_with_events(app: &AppHandle, server: &ServerEntry, tag: &str) -> R<B
                 let _ = repo.forget(keep);
             });
         }
-        Err(err) => emit_backup(app, &server.id, "error", None, err.to_string()),
+        Err(err) => {
+            emit_backup(app, &server.id, "error", None, err.to_string());
+            if app.state::<AppState>().config.lock().unwrap().notify.on_backup_fail {
+                crate::social::notify(app, &format!("backup:{}", server.id), Duration::from_secs(600), format!("⚠ Снапшот «{}» не удался: {err}", server.name));
+            }
+        }
     }
     res.map_err(e)
 }
@@ -428,8 +441,9 @@ pub fn get_monitor(app: AppHandle, id: String) -> crate::scheduler::MonitorInfo 
 }
 
 #[tauri::command]
-pub fn send_command(state: State<AppState>, id: String, command: String) -> R<()> {
+pub fn send_command(app: AppHandle, state: State<AppState>, id: String, command: String) -> R<()> {
     state.pm.system(&id, format!("> {}", command.trim()));
+    crate::social::audit(&app, &id, command.trim(), "console");
     state.pm.send(&id, &command).map_err(e)
 }
 
@@ -1247,6 +1261,126 @@ pub async fn modpack_export(app: AppHandle, id: String, path: String, include_co
             include_config,
         };
         pcm_core::modpack::export_client(&s.dir(), &s.mods, &opt, &PathBuf::from(path)).map_err(e)
+    })
+    .await
+}
+
+// ===================================================================== игроки и уведомления
+
+#[derive(Serialize)]
+pub struct PlayerRow {
+    name: String,
+    online: bool,
+    #[serde(flatten)]
+    rec: pcm_core::players::PlayerRec,
+    op: bool,
+    whitelisted: bool,
+    banned: bool,
+}
+
+#[derive(Serialize)]
+pub struct PlayersInfo {
+    running: bool,
+    rows: Vec<PlayerRow>,
+    lists: pcm_core::players::ServerLists,
+    shared_ips: Vec<(String, Vec<String>)>,
+    chat: Vec<pcm_core::players::ChatLine>,
+    audit: Vec<pcm_core::players::AuditLine>,
+}
+
+#[tauri::command]
+pub async fn players_info(app: AppHandle, id: String) -> R<PlayersInfo> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        let st = state.pm.status(&id);
+        let lists = pcm_core::players::lists(&s.dir());
+        let (players, shared, chat, audit) = crate::social::with_db(&app, &id, |db| {
+            (
+                db.players.clone(),
+                db.shared_ips(),
+                db.chat.iter().rev().take(200).cloned().collect::<Vec<_>>(),
+                db.audit.iter().rev().take(100).cloned().collect::<Vec<_>>(),
+            )
+        });
+        let lower = |v: &[String]| v.iter().map(|x| x.to_lowercase()).collect::<std::collections::HashSet<_>>();
+        let ops = lower(&lists.ops);
+        let wl = lower(&lists.whitelist);
+        let bans: std::collections::HashSet<String> = lists.banned.iter().map(|x| x.0.to_lowercase()).collect();
+        let mut names: std::collections::BTreeSet<String> = players.keys().cloned().collect();
+        names.extend(lists.known.keys().cloned());
+        names.extend(st.players.iter().cloned());
+        let mut rows: Vec<PlayerRow> = names
+            .into_iter()
+            .map(|n| {
+                let l = n.to_lowercase();
+                PlayerRow {
+                    online: st.players.iter().any(|p| p.eq_ignore_ascii_case(&n)),
+                    rec: players.get(&n).cloned().unwrap_or_default(),
+                    op: ops.contains(&l),
+                    whitelisted: wl.contains(&l),
+                    banned: bans.contains(&l),
+                    name: n,
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| b.online.cmp(&a.online).then(b.rec.last_seen.cmp(&a.rec.last_seen)).then(a.name.cmp(&b.name)));
+        Ok(PlayersInfo {
+            running: st.status == pcm_core::process::Status::Running,
+            rows,
+            lists,
+            shared_ips: shared,
+            chat,
+            audit,
+        })
+    })
+    .await
+}
+
+/// Действие с игроком: команда серверу. Имя проверяется, чтобы нельзя было подставить лишнее.
+#[tauri::command]
+pub fn player_action(app: AppHandle, state: State<AppState>, id: String, action: String, name: String, reason: String) -> R<()> {
+    if action != "whitelist_on" && action != "whitelist_off" && !pcm_core::players::valid_name(&name) {
+        return Err("недопустимое имя игрока".into());
+    }
+    let reason: String = reason.chars().filter(|c| !c.is_control()).take(120).collect();
+    let cmd = match action.as_str() {
+        "op" => format!("op {name}"),
+        "deop" => format!("deop {name}"),
+        "kick" => format!("kick {name} {reason}").trim().to_string(),
+        "ban" => format!("ban {name} {reason}").trim().to_string(),
+        "pardon" => format!("pardon {name}"),
+        "whitelist_add" => format!("whitelist add {name}"),
+        "whitelist_remove" => format!("whitelist remove {name}"),
+        "whitelist_on" => "whitelist on".into(),
+        "whitelist_off" => "whitelist off".into(),
+        _ => return Err("неизвестное действие".into()),
+    };
+    state.pm.system(&id, format!("> {cmd}"));
+    crate::social::audit(&app, &id, &cmd, "console");
+    state.pm.send(&id, &cmd).map_err(e)
+}
+
+/// Проверка уведомлений: тестовое сообщение во все каналы; для Telegram — ещё и имя бота.
+#[tauri::command]
+pub async fn notify_test(settings: pcm_core::notify::NotifySettings) -> R<String> {
+    bg(move || {
+        if !settings.any() {
+            return Err("не настроен ни Telegram, ни Discord".into());
+        }
+        let mut ok = Vec::new();
+        if settings.telegram_ready() {
+            let bot = pcm_core::notify::telegram_me(&settings.telegram_token).map_err(e)?;
+            ok.push(format!("Telegram (@{bot})"));
+        }
+        let errs = pcm_core::notify::send(&settings, "✅ ProtoCore-MCS-Manager: тестовое уведомление. Всё работает.");
+        if !errs.is_empty() {
+            return Err(errs.join("; "));
+        }
+        if settings.discord_ready() {
+            ok.push("Discord".into());
+        }
+        Ok(ok.join(", "))
     })
     .await
 }

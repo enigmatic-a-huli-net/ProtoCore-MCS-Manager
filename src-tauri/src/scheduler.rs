@@ -100,7 +100,68 @@ pub fn start(app: AppHandle) {
         .ok();
 }
 
+fn disk_free_gb(path: &std::path::Path) -> Option<f64> {
+    let disks = pcm_core::sysinfo::Disks::new_with_refreshed_list();
+    disks
+        .list()
+        .iter()
+        .filter(|d| path.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .map(|d| d.available_space() as f64 / 1024f64.powi(3))
+}
+
+fn alerts(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let n = state.config.lock().unwrap().notify.clone();
+    if !n.any() {
+        return;
+    }
+    let servers = state.config.lock().unwrap().servers.clone();
+    // свободное место — раз в 5 минут
+    static LAST_DISK: Mutex<Option<Instant>> = Mutex::new(None);
+    let disk_due = LAST_DISK.lock().unwrap().map_or(true, |t| t.elapsed() > Duration::from_secs(300));
+    if n.on_disk_low && disk_due {
+        *LAST_DISK.lock().unwrap() = Some(Instant::now());
+        for s in &servers {
+            if let Some(free) = disk_free_gb(&s.dir()) {
+                if free < n.disk_low_gb as f64 {
+                    crate::social::notify(app, &format!("disk:{}", s.id), Duration::from_secs(6 * 3600), format!("💽 Мало места у «{}»: свободно {:.1} ГБ", s.name, free));
+                }
+            }
+        }
+    }
+    // низкий TPS: два замера подряд ниже порога
+    if n.on_low_tps {
+        let sched = app.state::<Sched>();
+        for s in &servers {
+            let low = sched
+                .servers
+                .lock()
+                .unwrap()
+                .get(&s.id)
+                .map(|x| {
+                    let h: Vec<_> = x.history.iter().rev().take(2).collect();
+                    h.len() == 2 && h.iter().all(|t| t.tps < n.low_tps)
+                })
+                .unwrap_or(false);
+            if low {
+                let t = sched.servers.lock().unwrap()[&s.id].history.back().map(|x| x.tps).unwrap_or(0.0);
+                crate::social::notify(app, &format!("tps:{}", s.id), Duration::from_secs(900), format!("🐢 «{}»: TPS упал до {:.1}", s.name, t));
+            }
+        }
+    }
+    // сеть: потери за минуту
+    if n.on_net_bad {
+        let r = crate::netmon::report(app);
+        if r.last_min.samples >= 20 && r.last_min.loss >= 5.0 {
+            crate::social::notify(app, "net", Duration::from_secs(1800), format!("📶 Потери пакетов {:.0}% за последнюю минуту — у игроков будут лаги", r.last_min.loss));
+        }
+    }
+}
+
 fn tick(app: &AppHandle) {
+    crate::social::flush(app);
+    alerts(app);
     let state = app.state::<AppState>();
     let sched = app.state::<Sched>();
     let servers = state.config.lock().unwrap().servers.clone();

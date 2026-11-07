@@ -3,7 +3,7 @@ import { api, on, type NetReport, type BisectReport, type BisectStep, type Tps, 
 import { translate, type Key } from "./i18n";
 import { applyTheme } from "./theme";
 
-export type Tab = "console" | "network" | "diag" | "mods" | "plugins" | "backups" | "schedule" | "optimize" | "launch" | "properties";
+export type Tab = "console" | "players" | "network" | "diag" | "mods" | "plugins" | "backups" | "schedule" | "optimize" | "launch" | "properties";
 
 interface Toast { id: number; kind: "info" | "ok" | "error"; text: string }
 

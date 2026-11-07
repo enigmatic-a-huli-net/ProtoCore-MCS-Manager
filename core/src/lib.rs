@@ -29,7 +29,9 @@ pub mod launch;
 pub mod modpack;
 pub mod mods;
 pub mod net;
+pub mod notify;
 pub mod network;
+pub mod players;
 pub mod plugins;
 pub mod process;
 pub mod props;
@@ -39,3 +41,4 @@ pub mod update;
 pub mod util;
 
 pub use error::{Error, Result};
+pub use sysinfo;

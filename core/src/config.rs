@@ -371,6 +371,8 @@ pub struct Config {
     pub servers_root: String,
     /// Следить за качеством интернета (потери, задержка)
     pub network_monitor: bool,
+    /// Уведомления в Telegram / Discord
+    pub notify: crate::notify::NotifySettings,
     /// Последний выбранный сервер
     pub selected: String,
     pub servers: Vec<ServerEntry>,
@@ -388,6 +390,7 @@ impl Default for Config {
             curseforge_key: String::new(),
             servers_root: String::new(),
             network_monitor: true,
+            notify: Default::default(),
             selected: String::new(),
             servers: vec![],
         }
