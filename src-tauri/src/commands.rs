@@ -1683,3 +1683,18 @@ pub fn set_simple_mode(state: State<AppState>, on: bool) -> R<()> {
     state.config.lock().unwrap().simple_mode = on;
     state.save()
 }
+
+#[derive(Serialize)]
+pub struct FoundChat {
+    id: String,
+    name: String,
+}
+
+#[tauri::command]
+pub async fn telegram_find_chat(token: String) -> R<FoundChat> {
+    bg(move || match pcm_core::notify::telegram_find_chat(token.trim()).map_err(e)? {
+        Some((id, name)) => Ok(FoundChat { id, name }),
+        None => Err("бот пока не получил сообщений: открой его в Telegram, нажми «Start» (или напиши любое сообщение) и нажми кнопку ещё раз".into()),
+    })
+    .await
+}

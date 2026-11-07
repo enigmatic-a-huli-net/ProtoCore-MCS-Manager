@@ -16,6 +16,19 @@
   let netmon = $state(c.network_monitor ?? true);
   let nt = $state<NotifySettings>({ ...DEFAULT_NOTIFY, ...(c.notify ?? {}) });
   let testing = $state(false);
+  let finding = $state(false);
+  async function findChat() {
+    finding = true;
+    try {
+      const c = await api.telegramFindChat(nt.telegram_token);
+      nt.telegram_chat = c.id;
+      toast(t("nt.found", { name: c.name || c.id }), "ok");
+    } catch (e) {
+      fail(e);
+    } finally {
+      finding = false;
+    }
+  }
   async function testNotify() {
     testing = true;
     try {
@@ -162,7 +175,7 @@
     <p class="muted small" style="margin:0">{t("nt.text")}</p>
     <div class="grid">
       <label class="field"><span>{t("nt.tgToken")}</span><input type="password" bind:value={nt.telegram_token} autocomplete="off" placeholder="123456:ABC…" /></label>
-      <label class="field"><span>{t("nt.tgChat")}</span><input bind:value={nt.telegram_chat} placeholder="123456789" /></label>
+      <label class="field"><span>{t("nt.tgChat")}</span><div class="row"><input class="grow" bind:value={nt.telegram_chat} placeholder="123456789" /><button type="button" class="btn sm" disabled={finding || !nt.telegram_token.trim()} onclick={findChat}>{finding ? "…" : t("nt.find")}</button></div></label>
     </div>
     <p class="muted small" style="margin:0">{t("nt.tgTokenHint")} {t("nt.tgChatHint")}</p>
     <label class="check"><input type="checkbox" bind:checked={nt.telegram_bot} disabled={!nt.telegram_token || !nt.telegram_chat} />{t("nt.bot")}</label>

@@ -301,6 +301,7 @@ export const api = {
   logsSearch: (id: string, query: string) => invoke<LogHit[]>("logs_search", { id, query }),
   logsClean: (id: string, days: number) => invoke<CleanResult>("logs_clean", { id, days }),
   setSimpleMode: (on: boolean) => invoke<void>("set_simple_mode", { on }),
+  telegramFindChat: (token: string) => invoke<{ id: string; name: string }>("telegram_find_chat", { token }),
   openPath: (path: string) => invoke<void>("open_path", { path, reveal: false }),
   revealPath: (path: string) => invoke<void>("open_path", { path, reveal: true }),
   checkCfKey: (key: string) => invoke<string>("check_cf_key", { key }),

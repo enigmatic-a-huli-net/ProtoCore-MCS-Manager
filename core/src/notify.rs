@@ -86,9 +86,46 @@ fn tg_call(token: &str, method: &str, body: &Value) -> Result<Value> {
     }
 }
 
+/// id чата: цифры (у групп с минусом) или @имя_канала. Убираем пробелы и случайный «@» перед цифрами.
+pub fn normalize_chat(chat: &str) -> String {
+    let c: String = chat.chars().filter(|ch| !ch.is_whitespace()).collect();
+    match c.strip_prefix('@') {
+        Some(rest) if rest.trim_start_matches('-').chars().all(|x| x.is_ascii_digit()) && !rest.is_empty() => rest.to_string(),
+        _ => c,
+    }
+}
+
 pub fn telegram_send(token: &str, chat: &str, text: &str) -> Result<()> {
-    tg_call(token, "sendMessage", &json!({ "chat_id": chat.trim(), "text": text, "disable_web_page_preview": true }))?;
-    Ok(())
+    match tg_call(token, "sendMessage", &json!({ "chat_id": normalize_chat(chat), "text": text, "disable_web_page_preview": true })) {
+        Err(Error::Network(m)) if m.contains("chat not found") => Err(Error::Network(
+            "Telegram не нашёл чат. Так бывает, если ты ещё не написал боту /start (бот не может писать первым), \
+             или указан не твой id (а, например, id бота из токена). Нажми «Найти мой чат» в настройках."
+                .into(),
+        )),
+        Err(e) => Err(e),
+        Ok(_) => Ok(()),
+    }
+}
+
+/// Найти чат по последним сообщениям боту: (id, название). Сначала напиши боту что угодно.
+pub fn telegram_find_chat(token: &str) -> Result<Option<(String, String)>> {
+    let v = tg_call(token, "getUpdates", &json!({ "timeout": 0, "allowed_updates": ["message", "channel_post", "my_chat_member"] }))?;
+    let mut found = None;
+    for u in v["result"].as_array().into_iter().flatten() {
+        let chat = ["message", "channel_post", "my_chat_member"].iter().find_map(|k| u.get(*k).map(|m| &m["chat"]));
+        if let Some(c) = chat {
+            if let Value::Number(n) = &c["id"] {
+                let name = c["title"].as_str().or(c["username"].as_str().map(|_| "")).unwrap_or("");
+                let name = if name.is_empty() {
+                    [c["first_name"].as_str(), c["last_name"].as_str()].into_iter().flatten().collect::<Vec<_>>().join(" ")
+                } else {
+                    name.to_string()
+                };
+                found = Some((n.to_string(), name));
+            }
+        }
+    }
+    Ok(found)
 }
 
 pub fn discord_send(webhook: &str, text: &str) -> Result<()> {
@@ -211,6 +248,9 @@ mod tests {
         assert_eq!(parse_cmd("/start lobby"), Some(BotCmd::Start(Some("lobby".into()))));
         assert_eq!(parse_cmd("/say привет всем"), Some(BotCmd::Say(None, "привет всем".into())));
         assert_eq!(parse_cmd("привет"), None);
+        assert_eq!(normalize_chat(" 123 456 "), "123456");
+        assert_eq!(normalize_chat("@-100123"), "-100123");
+        assert_eq!(normalize_chat("@mychannel"), "@mychannel");
     }
 
     #[test]
