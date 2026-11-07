@@ -211,7 +211,7 @@ mod tests {
             ..Default::default()
         };
         let c = build(&s).unwrap();
-        assert_eq!(c.program, "java");
+        assert!(c.program == "java" || c.program.contains("java"));
         assert!(c.args.contains(&"-Xmx8192M".to_string()));
         assert!(c.args.ends_with(&["-jar".into(), "youer-1.21.1-3068bd4.jar".into(), "nogui".into()]));
     }

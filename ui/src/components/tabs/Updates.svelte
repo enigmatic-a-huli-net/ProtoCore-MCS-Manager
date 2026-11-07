@@ -90,7 +90,7 @@
   </div>
   <p class="muted small hint">{t("upd.note")}</p>
   {#if testing}
-    <p class="small hint">{app.catalogProgress?.title ? `${t("upd.sbDownloading")} ${app.catalogProgress.title}` : t("upd.sbRunningLong")}</p>
+    <p class="small hint">{app.catalogProgress?.title && app.catalogProgress.done < app.catalogProgress.total ? `${t("upd.sbDownloading")} ${app.catalogProgress.title}` : t("upd.sbRunningLong")}</p>
   {:else if sandbox}
     <p class="small hint" class:warnline={!sandbox.ok} class:okline={sandbox.ok}>{sandbox.ok ? "✔" : "✖"} {sandbox.message}</p>
   {/if}
