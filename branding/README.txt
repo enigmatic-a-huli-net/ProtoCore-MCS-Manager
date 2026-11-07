@@ -8,5 +8,5 @@
 
 Перезапусти менеджер — файлы подхватятся без пересборки.
 
-Иконка самого .exe задаётся при сборке: замени branding/icon-source.png в исходниках
+Иконка самого .exe задаётся при сборке: замени branding/icon-source.png в исходниках (сейчас — логотип со светлой обводкой)
 и выполни  npx tauri icon branding/icon-source.png -o src-tauri/icons

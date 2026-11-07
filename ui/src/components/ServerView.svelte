@@ -191,13 +191,14 @@
 
   .ident { min-width: 0; display: grid; gap: 4px; }
   .ident h1 { font-size: 1.35em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sub { font-size: 0.88em; gap: 14px; min-width: 0; white-space: nowrap; }
+  .sub { font-size: 0.88em; gap: 2px 14px; min-width: 0; white-space: nowrap; flex-wrap: wrap; }
   .sub > span { flex: none; }
   .path {
     display: inline-flex;
     align-items: center;
     gap: 5px;
     min-width: 0;
+    max-width: 100%;
     padding: 0;
     border: 0;
     background: none;

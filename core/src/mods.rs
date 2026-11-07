@@ -84,6 +84,9 @@ pub struct ModMeta {
     /// Основные Java-пакеты мода (com.simibubi.create …) — чтобы по стектрейсу понять, чей это код
     #[serde(default)]
     pub packages: Vec<String>,
+    /// Библиотека без своих метаданных (обёртка jar-in-jar, FMLModType: LIBRARY)
+    #[serde(default)]
+    pub library: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,6 +282,7 @@ fn empty_meta() -> ModMeta {
         conflicts: vec![],
         homepage: String::new(),
         packages: vec![],
+        library: false,
     }
 }
 
@@ -351,6 +355,39 @@ fn parse_archive<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, nested: bool) -> 
                         }
                     }
                 }
+            }
+        } else if nested {
+            // нет своих метаданных: обёртка с вложенными модами (как mezz_config-standalone)
+            // или библиотека (FMLModType: LIBRARY / GAMELIBRARY)
+            let manifest = read_text(zip, "META-INF/MANIFEST.MF").unwrap_or_default();
+            let mf = |k: &str| {
+                manifest
+                    .lines()
+                    .find_map(|l| l.strip_prefix(&format!("{k}:")))
+                    .map(|v| v.trim().to_string())
+                    .unwrap_or_default()
+            };
+            let mut inner: Vec<String> = Vec::new();
+            if let Some(meta) = read_text(zip, "META-INF/jarjar/metadata.json") {
+                if let Ok(v) = serde_json::from_str::<Value>(&meta) {
+                    for j in v.get("jars").and_then(Value::as_array).into_iter().flatten() {
+                        if let Some(p) = j.get("path").and_then(Value::as_str) {
+                            inner.extend(nested_ids(zip, p));
+                        }
+                    }
+                }
+            }
+            let fml_type = mf("FMLModType");
+            if !inner.is_empty() || !fml_type.is_empty() {
+                m.library = true;
+                m.loader = Some(ModLoader::NeoForge);
+                m.ids = inner;
+                m.name = [mf("Specification-Title"), mf("Implementation-Title")]
+                    .into_iter()
+                    .find(|x| !x.is_empty() && x != "standaloneJar")
+                    .unwrap_or_default();
+                m.version = [mf("Specification-Version"), mf("Implementation-Version")].into_iter().find(|x| !x.is_empty()).unwrap_or_default();
+                m.description = format!("Библиотека ({})", if fml_type.is_empty() { "jar-in-jar" } else { &fml_type });
             }
         }
     }
@@ -583,6 +620,8 @@ pub fn parse_forge_toml(s: &str, loader: ModLoader, jar_version: Option<&str>, m
 
     // зависимости: [[dependencies.<modid>]]
     let mut client_side_core = false;
+    // сколько «основных» зависимостей (minecraft / загрузчик) и сколько из них помечены CLIENT
+    let (mut core_deps, mut core_client) = (0u32, 0u32);
     if let Some(deps) = doc.get("dependencies").and_then(|v| v.as_table()) {
         for (_owner, list) in deps {
             for d in list.as_array().into_iter().flatten() {
@@ -602,12 +641,19 @@ pub fn parse_forge_toml(s: &str, loader: ModLoader, jar_version: Option<&str>, m
                         }
                     });
                 match kind.as_str() {
+                    // несовместимость только на клиенте серверу не важна
+                    "incompatible" if side == Side::Client => {}
+                    "discouraged" if side == Side::Client => {}
                     "incompatible" => m.breaks.push(id.to_string()),
                     "discouraged" => m.conflicts.push(id.to_string()),
                     k => {
                         let required = k == "required";
-                        if (id == "minecraft" || id == "neoforge" || id == "forge") && side == Side::Client {
-                            client_side_core = true;
+                        if id == "minecraft" || id == "neoforge" || id == "forge" {
+                            core_deps += 1;
+                            if side == Side::Client {
+                                core_client += 1;
+                                client_side_core = true;
+                            }
                         }
                         m.deps.push(Dependency {
                             id: id.to_string(),
@@ -627,6 +673,11 @@ pub fn parse_forge_toml(s: &str, loader: ModLoader, jar_version: Option<&str>, m
         m.side = Side::Client;
         m.client = ClientConfidence::Definite;
         m.client_reason = "mods.toml: clientSideOnly = true".into();
+    } else if client_side_core && core_client >= 2 && core_client == core_deps {
+        // и minecraft, и загрузчик нужны мод только на клиенте (так делает, например, Sodium)
+        m.side = Side::Client;
+        m.client = ClientConfidence::Definite;
+        m.client_reason = "зависимости от minecraft и загрузчика помечены side=\"CLIENT\"".into();
     } else if client_side_core {
         m.side = Side::Client;
         m.client = ClientConfidence::Likely;
@@ -671,6 +722,10 @@ fn effective_client(meta: &ModMeta, settings: &ModSettings) -> (ClientConfidence
             return (ClientConfidence::Definite, "в твоём списке клиентских модов".into());
         }
         if CLIENT_BLACKLIST.contains(&lid.as_str()) {
+            // два независимых признака — уже уверенно
+            if meta.client == ClientConfidence::Likely {
+                return (ClientConfidence::Definite, format!("{}; и в списке известных клиентских модов", meta.client_reason));
+            }
             return (ClientConfidence::Likely, "в списке известных клиентских модов".into());
         }
     }
@@ -715,11 +770,23 @@ pub fn list(server_dir: &Path, server_loader: Option<ModLoader>, settings: &ModS
 pub fn analyze(mods: &mut Vec<ModInfo>, server_loader: Option<ModLoader>) -> ModReport {
     // что доступно среди включённых: id + provides
     let mut available: HashMap<String, String> = HashMap::new(); // id → файл
+    // сначала собственные id модов, потом вложенные копии (jar-in-jar) — свои важнее
     for m in mods.iter().filter(|m| m.enabled) {
-        for id in m.meta.ids.iter().chain(m.meta.provides.iter()) {
+        for id in &m.meta.ids {
             available.entry(id.to_lowercase()).or_insert_with(|| m.file.clone());
         }
     }
+    for m in mods.iter().filter(|m| m.enabled) {
+        for id in &m.meta.provides {
+            available.entry(id.to_lowercase()).or_insert_with(|| m.file.clone());
+        }
+    }
+    // id → файл, где мод лежит «сам» (у вложенных копий версия неизвестна)
+    let own: HashMap<String, String> = mods
+        .iter()
+        .filter(|m| m.enabled && !m.meta.library)
+        .flat_map(|m| m.meta.ids.iter().map(move |id| (id.to_lowercase(), m.file.clone())))
+        .collect();
     // где лежит выключенный мод с этим id
     let mut disabled_by_id: HashMap<String, String> = HashMap::new();
     for m in mods.iter().filter(|m| !m.enabled) {
@@ -754,7 +821,8 @@ pub fn analyze(mods: &mut Vec<ModInfo>, server_loader: Option<ModLoader>) -> Mod
             if let Some(file) = available.get(&did).or_else(|| available.get(&alias)) {
                 required_by.entry(file.clone()).or_default().push(name.clone());
                 let have = ver_of.get(file).cloned().unwrap_or_default();
-                if version_matches(&d.version, &have) == Some(false) {
+                let own_file = own.get(&did).or_else(|| own.get(&alias)) == Some(file);
+                if own_file && file != &m.file && version_matches(&d.version, &have) == Some(false) {
                     m.wrong_deps.push(d.id.clone());
                     m.problems.push(format!(
                         "нужна {} версии {}, а стоит {}",
@@ -848,7 +916,7 @@ pub fn analyze(mods: &mut Vec<ModInfo>, server_loader: Option<ModLoader>) -> Mod
                 m.problems.push(format!("мод для {:?}, а сервер {:?}", ml, server));
             }
         }
-        if m.meta.ids.is_empty() {
+        if m.meta.ids.is_empty() && !m.meta.library {
             m.problems.push("в jar нет метаданных мода — возможно, это библиотека или мусор".into());
         }
         if m.enabled && m.meta.client == ClientConfidence::Definite {
@@ -1132,6 +1200,22 @@ type="incompatible"
     }
 
     #[test]
+    fn sodium_style_is_definite() {
+        let mut m = empty_meta();
+        parse_forge_toml(
+            "modLoader=\"javafml\"\n[[mods]]\nmodId=\"sodium\"\n\
+[[dependencies.sodium]]\nmodId=\"minecraft\"\ntype=\"required\"\nside=\"CLIENT\"\n\
+[[dependencies.sodium]]\nmodId=\"neoforge\"\ntype=\"required\"\nside=\"CLIENT\"\n\
+[[dependencies.sodium]]\nmodId=\"embeddium\"\ntype=\"incompatible\"\nside=\"CLIENT\"\n",
+            ModLoader::NeoForge,
+            None,
+            &mut m,
+        );
+        assert_eq!(m.client, ClientConfidence::Definite);
+        assert!(m.breaks.is_empty());
+    }
+
+    #[test]
     fn forge_client_side_dep() {
         let mut m = empty_meta();
         parse_forge_toml(
@@ -1200,6 +1284,38 @@ type="incompatible"
         assert_eq!(r.wrong_versions.len(), 1);
         assert_eq!(r.wrong_versions[0].have, "1.2.2");
         assert!(r.missing.is_empty());
+    }
+
+    #[test]
+    fn standalone_wrapper_and_nested_version() {
+        let t = tempfile::tempdir().unwrap();
+        let mods = t.path().join("mods");
+        let inner = |id: &str, ver: &str| {
+            let mut v = Vec::new();
+            let mut z = zip::ZipWriter::new(Cursor::new(&mut v));
+            z.start_file("META-INF/neoforge.mods.toml", zip::write::SimpleFileOptions::default()).unwrap();
+            z.write_all(format!("[[mods]]\nmodId=\"{id}\"\nversion=\"{ver}\"\n").as_bytes()).unwrap();
+            z.finish().unwrap();
+            v
+        };
+        let cfg_new = inner("mezz_config", "0.6.11");
+        let cfg_old = inner("mezz_config", "0.6.6");
+        jar(&mods, "mezz_config-standalone.jar", &[
+            ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\nSpecification-Title: MezzConfig\nSpecification-Version: 0.6.11\nFMLModType: GAMELIBRARY\n"),
+            ("META-INF/jarjar/metadata.json", br#"{"jars":[{"path":"META-INF/jarjar/c.jar"}]}"#),
+            ("META-INF/jarjar/c.jar", &cfg_new),
+        ]);
+        jar(&mods, "jei.jar", &[
+            ("META-INF/neoforge.mods.toml", b"[[mods]]\nmodId=\"jei\"\nversion=\"19.64.0\"\n[[dependencies.jei]]\nmodId=\"mezz_config\"\ntype=\"required\"\nversionRange=\"[0.6.3,1.0.0)\"\nside=\"BOTH\"\n"),
+            ("META-INF/jarjar/metadata.json", br#"{"jars":[{"path":"META-INF/jarjar/c.jar"}]}"#),
+            ("META-INF/jarjar/c.jar", &cfg_old),
+        ]);
+        let r = list(t.path(), Some(ModLoader::NeoForge), &ModSettings::default());
+        assert!(r.wrong_versions.is_empty(), "{:?}", r.wrong_versions);
+        assert!(r.missing.is_empty());
+        let w = r.mods.iter().find(|m| m.file == "mezz_config-standalone.jar").unwrap();
+        assert_eq!(w.meta.name, "MezzConfig");
+        assert!(w.problems.is_empty(), "{:?}", w.problems);
     }
 
     #[test]

@@ -141,7 +141,9 @@ fn tick(app: &AppHandle) {
                 };
                 sched.servers.lock().unwrap().get_mut(&s.id).unwrap().last_tps = Some(Instant::now());
                 if let Some(cmd) = cmds.first() {
-                    if let Ok(lines) = state.pm.query(&s.id, cmd, tps::RESPONSE_PATTERN, Duration::from_millis(2500)) {
+                    // spark отвечает из своего потока — даём ему больше времени
+                    let window = Duration::from_millis(if cmd.starts_with("spark") { 4000 } else { 2500 });
+                    if let Ok(lines) = state.pm.query(&s.id, cmd, tps::RESPONSE_PATTERN, window) {
                         let mut m = sched.servers.lock().unwrap();
                         let e = m.get_mut(&s.id).unwrap();
                         match tps::parse(&lines, cmd) {

@@ -162,8 +162,31 @@ macro_rules! rx {
     };
 }
 
-rx!(r_frame, r"^\s*at\s+(?:[\w.$/@-]+//)?([\w$]+(?:\.[\w$]+)+)\.[\w$<>]+\(");
-rx!(r_client_class, r"(?i)(?:Attempted to load class|NoClassDefFoundError:?|ClassNotFoundException:?)\s+([\w/$.]*net[/.]minecraft[/.]client[/.][\w/$.]+)");
+/// Класс из строки стектрейса. Понимает модульный формат:
+/// `at LAYER SERVICE/sodium_service@0.8.13/net.caffeinemc.Foo.bar(Foo.java:1)`,
+/// `at MC-BOOTSTRAP/fml_loader@4.0/net.x.Y.z(...)`, `at TRANSFORMER/create@6.0/com.x.Y.z(...)`.
+/// Возвращает (класс, имя модуля).
+pub fn frame_class(line: &str) -> Option<(String, Option<String>)> {
+    let t = line.trim_start().strip_prefix("at ")?;
+    let head = t.split('(').next()?.trim();
+    let (module, qualified) = match head.rfind('/') {
+        Some(i) => (Some(&head[..i]), &head[i + 1..]),
+        None => (None, head),
+    };
+    // «Class.method» → «Class»
+    let class = qualified.rsplit_once('.')?.0;
+    if !class.contains('.') {
+        return None;
+    }
+    // «LAYER SERVICE/sodium_service@0.8.13» → «sodium_service»
+    let module_name = module.and_then(|m| {
+        let last = m.rsplit('/').next().unwrap_or(m);
+        let name = last.split('@').next().unwrap_or(last).trim();
+        (!name.is_empty() && last.contains('@')).then(|| name.to_string())
+    });
+    Some((class.to_string(), module_name))
+}
+rx!(r_client_class, r"(?i)(?:Attempted to load class|NoClassDefFoundError:?|ClassNotFoundException:?)\s+((?:[\w/$.]*net[/.]minecraft[/.]client[/.]|org[/.]lwjgl[/.]|com[/.]mojang[/.]blaze3d[/.])[\w/$.]*)");
 rx!(r_invalid_dist, r"(?i)for invalid (?:dist|side) DEDICATED_SERVER");
 rx!(r_mixin_mod, r"(?i)Mixin apply (?:for mod|failed) ([\w\-.]+?)(?:\.mixins?\.json|\s|:|$)");
 rx!(r_mixin_cfg, r"(?i)(?:from mod|mixin config|config) ([\w\-]+)\.mixins?\.json");
@@ -246,7 +269,7 @@ pub fn analyze_text(text: &str, idx: &ModIndex) -> Vec<Finding> {
                     "client_class",
                     Severity::Error,
                     "Мод пытается загрузить клиентский код на сервере".into(),
-                    format!("Класс {class} существует только в игре, не на сервере."),
+                    format!("Класс {class} существует только в игре (графика, окно, звук), на сервере его нет."),
                     "Такой мод нужно убрать с сервера — он нужен только игрокам. Это безопасно: у клиентских модов нет блоков в мире.",
                     line,
                 )
@@ -675,9 +698,19 @@ pub fn human_range(r: &str) -> String {
 
 fn first_mod_frame<'a>(lines: &[&str], from: usize, max: usize, idx: &ModIndex<'a>) -> Option<&'a ModInfo> {
     for l in lines.iter().skip(from).take(max) {
-        if let Some(c) = r_frame().captures(l) {
-            if let Some(m) = idx.by_class(&c[1]) {
+        if let Some((class, module)) = frame_class(l) {
+            if let Some(m) = idx.by_class(&class) {
                 return Some(m);
+            }
+            // имя модуля: «sodium_service», «create» → id мода
+            if let Some(mname) = module {
+                const SKIP: &[&str] = &["minecraft", "neoforge", "forge", "fml_loader", "fmlcore", "javafmllanguage", "modlauncher", "securejarhandler", "bootstraplauncher", "mixin", "java.base", "jdk.internal"];
+                if !SKIP.contains(&mname.as_str()) {
+                    let base = mname.trim_end_matches("_service").trim_end_matches("_mixins");
+                    if let Some(m) = idx.find(base).or_else(|| idx.find(&mname)) {
+                        return Some(m);
+                    }
+                }
             }
         } else if !l.trim().is_empty() && !l.trim_start().starts_with("Caused by") && !l.contains("...") && !l.trim_start().starts_with("at ") {
             // стектрейс кончился
@@ -1004,6 +1037,41 @@ Mod 'Foo' (foo) 1.0 requires version 2.0.0 of 'Bar Lib' (barlib), but only the w
         assert!(!f.iter().any(|x| x.code == "missing_dep" && x.title.contains("tfmg")));
         assert!(quarantine_candidates(&f, true, Confidence::Low).is_empty());
         assert_eq!(human_range("[21.1,)"), "от 21.1");
+    }
+
+    #[test]
+    fn sodium_lwjgl_crash() {
+        let mut meta = crate::mods::read_meta(Path::new("/nonexistent"));
+        meta.ids = vec!["sodium".into()];
+        meta.name = "Sodium".into();
+        meta.packages = vec!["net.caffeinemc.mods".into()];
+        let mut v = vec![ModInfo {
+            file: "sodium-neoforge-0.8.13.jar".into(),
+            enabled: true,
+            size: 0,
+            id: "sodium".into(),
+            meta,
+            disabled_reason: None,
+            disabled_detail: None,
+            required_by: vec![],
+            missing_deps: vec![],
+            wrong_deps: vec![],
+            problems: vec![],
+        }];
+        let r = analyze_mods(&mut v, None);
+        let idx = ModIndex::new(Some(&r));
+        let log = "Exception in thread \"main\" java.lang.NoClassDefFoundError: org/lwjgl/Version\n\
+\tat LAYER SERVICE/sodium_service@0.8.13+mc1.21.1/net.caffeinemc.mods.sodium.client.compatibility.checks.PreLaunchChecks.isUsingKnownCompatibleLwjglVersion(PreLaunchChecks.java:136)\n";
+        let f = analyze_text(log, &idx);
+        let c = f.iter().find(|x| x.code == "client_class").expect("нет client_class");
+        assert_eq!(c.culprits[0].file, "sodium-neoforge-0.8.13.jar");
+        assert_eq!(quarantine_candidates(&f, false, Confidence::Medium).len(), 1);
+        // и по одному имени модуля, без пакетов
+        assert_eq!(
+            frame_class("\tat LAYER SERVICE/sodium_service@0.8.13/net.x.Y.z(Y.java:1)"),
+            Some(("net.x.Y".to_string(), Some("sodium_service".to_string())))
+        );
+        assert_eq!(frame_class("\tat net.minecraft.Foo.bar(Foo.java:1)").unwrap().0, "net.minecraft.Foo");
     }
 
     #[test]

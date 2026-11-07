@@ -2,11 +2,11 @@
 import type { Theme } from "./api";
 
 export const DEFAULT_THEME: Theme = {
-  mode: "dark", accent: "#7c5cff", background: "", surface: "", text: "",
+  mode: "dark", accent: "#b85ad8", background: "", surface: "", text: "",
   radius: 10, font_size: 14, animations: true, anim_speed: 1, anim_force: false,
 };
 
-export const ACCENTS = ["#7c5cff", "#3fa7ff", "#2fbf8f", "#e8a33d", "#ef5b6b", "#d36bd6", "#8a9a5b"];
+export const ACCENTS = ["#b85ad8", "#7c5cff", "#3fa7ff", "#2fbf8f", "#e8a33d", "#ef5b6b", "#d36bd6", "#8a9a5b"];
 
 export function applyTheme(t: Theme) {
   const root = document.documentElement;

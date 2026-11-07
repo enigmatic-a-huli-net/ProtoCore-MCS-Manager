@@ -72,7 +72,7 @@ pub enum ThemeMode {
     System,
 }
 
-/// Настройки внешнего вида. Цвета — CSS-строки (`#7c5cff`).
+/// Настройки внешнего вида. Цвета — CSS-строки (`#b85ad8`).
 /// Пустая строка значит «взять из встроенной темы».
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -98,7 +98,7 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             mode: ThemeMode::Dark,
-            accent: "#7c5cff".into(),
+            accent: "#b85ad8".into(),
             background: String::new(),
             surface: String::new(),
             text: String::new(),

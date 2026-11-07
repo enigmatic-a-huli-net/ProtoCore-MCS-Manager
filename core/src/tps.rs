@@ -25,7 +25,7 @@ pub struct Tps {
 }
 
 /// Регулярка строк ответа (для перехвата). Широкая, но действует только 2–3 секунды.
-pub const RESPONSE_PATTERN: &str = r"(?i)(TPS \(|ms/tick|Mean tick time|TPS from last|tick times|Tick durations|^\s*(\[[^\]]*\]\s*)*(\[[^\]]*\]:\s*)?[\s*◴⚡]*\*?\d+(\.\d+)?[\s,/;*◴]+\*?\d|Unknown or incomplete command|<--\[HERE\]|Unknown command)";
+pub const RESPONSE_PATTERN: &str = r"(?i)(\[⚡\]|TPS \(|ms/tick|Mean tick time|TPS from last|tick times|Tick durations|^\s*(\[[^\]]*\]\s*)*(\[[^\]]*\]:\s*)?[\s*◴⚡]*\*?\d+(\.\d+)?[\s,/;*◴]+\*?\d|Unknown or incomplete command|<--\[HERE\]|Unknown command)";
 
 /// Команды по порядку предпочтения.
 pub fn commands(core: CoreKind, has_spark: bool) -> Vec<&'static str> {
@@ -58,10 +58,12 @@ fn num(s: &str) -> Option<f32> {
 
 fn strip_prefix(l: &str) -> &str {
     // «[12:00:00] [Server thread/INFO] [minecraft/MinecraftServer]: текст» → «текст»
-    match l.rfind("]: ") {
+    let s = match l.rfind("]: ") {
         Some(i) => &l[i + 3..],
         None => l.trim(),
-    }
+    };
+    // spark начинает каждую строку с «[⚡]»
+    s.trim_start().trim_start_matches("[⚡]").trim()
 }
 
 /// Команда не поддерживается сервером.
@@ -114,8 +116,11 @@ pub fn parse(lines: &[String], via: &str) -> Option<Tps> {
             let after = b.split_once(':').map(|x| x.1).unwrap_or("");
             let mut vals: Vec<f32> = re_nums.find_iter(after).filter_map(|m| num(m.as_str())).collect();
             if vals.is_empty() {
-                if let Some(next) = body.get(i + 1) {
-                    vals = re_nums.find_iter(next).filter_map(|m| num(m.as_str())).collect();
+                // значения — в первой следующей непустой строке, и это должна быть строка из чисел
+                if let Some(next) = body.iter().skip(i + 1).find(|x| !x.trim().is_empty()) {
+                    if next.chars().all(|c| c.is_ascii_digit() || " .,*".contains(c)) {
+                        vals = re_nums.find_iter(next).filter_map(|m| num(m.as_str())).collect();
+                    }
                 }
             }
             // spark: 5s, 10s, 1m, … — берём 1m (третье), Paper: 1m — первое
@@ -124,7 +129,7 @@ pub fn parse(lines: &[String], via: &str) -> Option<Tps> {
             let mut out = Tps { tps: tps.min(20.0), mspt: None, mspt_peak: None, via: via.into(), ts: now };
             // spark: «Tick durations (min/med/95%ile/max ms) from last 10s, 1m:» → «0.4/0.6/1.2/5.0; …»
             if let Some(j) = body.iter().position(|x| x.contains("Tick durations") || x.contains("tick times")) {
-                if let Some(line) = body.get(j + 1) {
+                if let Some(line) = body.iter().skip(j + 1).find(|x| !x.trim().is_empty()) {
                     let first = line.split([';', ',']).next().unwrap_or("");
                     let parts: Vec<f32> = re_nums.find_iter(first).filter_map(|m| num(m.as_str())).collect();
                     if body[j].contains("Tick durations") && parts.len() >= 4 {
@@ -178,6 +183,27 @@ mod tests {
         assert_eq!(s.tps, 18.4);
         assert_eq!(s.mspt, Some(6.2));
         assert_eq!(s.mspt_peak, Some(41.0));
+    }
+
+    /// Настоящий вывод spark 1.10 на NeoForge 1.21.1 (из живого запуска).
+    #[test]
+    fn spark_real_output() {
+        let raw = "[20:49:47] [spark-worker-pool-1-thread-3/INFO] [minecraft/MinecraftServer]: [⚡] TPS from last 5s, 10s, 1m, 5m, 15m:\n\
+[20:49:47] [spark-worker-pool-1-thread-3/INFO] [minecraft/MinecraftServer]: [⚡]  19.99, 20.0, *20.0, *20.0, *20.0\n\
+[20:49:47] [spark-worker-pool-1-thread-3/INFO] [minecraft/MinecraftServer]: [⚡] \n\
+[20:49:47] [spark-worker-pool-1-thread-3/INFO] [minecraft/MinecraftServer]: [⚡] Tick durations (min/med/95%ile/max ms) from last 10s, 1m:\n\
+[20:49:47] [spark-worker-pool-1-thread-3/INFO] [minecraft/MinecraftServer]: [⚡]  0.2/0.9/33.1/63.9;  0.2/1.0/38.3/63.9\n\
+[20:49:47] [spark-worker-pool-1-thread-3/INFO] [minecraft/MinecraftServer]: [⚡] \n\
+[20:49:47] [spark-worker-pool-1-thread-3/INFO] [minecraft/MinecraftServer]: [⚡] CPU usage from last 10s, 1m, 15m:\n\
+[20:49:47] [spark-worker-pool-1-thread-3/INFO] [minecraft/MinecraftServer]: [⚡]  76%, 88%, 88%  (system)\n\
+[20:49:47] [spark-worker-pool-1-thread-3/INFO] [minecraft/MinecraftServer]: [⚡]  11%, 34%, 34%  (process)";
+        let lines = v(raw);
+        let re = Regex::new(RESPONSE_PATTERN).unwrap();
+        assert!(lines.iter().all(|l| re.is_match(l)), "не все строки spark перехватываются");
+        let t = parse(&lines, "spark tps").unwrap();
+        assert_eq!(t.tps, 20.0);
+        assert_eq!(t.mspt, Some(0.9));
+        assert_eq!(t.mspt_peak, Some(33.1));
     }
 
     #[test]

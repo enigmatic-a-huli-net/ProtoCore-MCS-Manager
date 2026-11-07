@@ -1,8 +1,58 @@
-# ProtoCore-MCS-Manager
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-outlined.png">
+    <img src="docs/logo.png" alt="ProtoCore" width="160">
+  </picture>
+</p>
 
-Менеджер серверов Minecraft для Windows: запуск, консоль, моды и плагины,
-снапшоты с откатом одной кнопкой. Лёгкий: ядро на Rust, интерфейс выгружается
-из памяти, когда окно свёрнуто в трей.
+<h1 align="center">ProtoCore-MCS-Manager</h1>
+
+<p align="center">
+  Менеджер серверов Minecraft для Windows: запуск, консоль, моды и плагины,<br>
+  диагностика крашей, снапшоты с откатом одной кнопкой.<br>
+  Лёгкий: ядро на Rust, интерфейс выгружается из памяти, когда окно свёрнуто в трей.
+</p>
+
+<p align="center">
+  <a href="https://github.com/enigmatic-a-huli-net/ProtoCore-MCS-Manager/releases/latest"><b>Скачать последнюю версию</b></a>
+</p>
+
+![Консоль работающего сервера NeoForge с TPS в шапке](docs/screenshots/console.png)
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/mods.png" alt="Моды: иконки, зависимости, клиентские моды"></td>
+    <td><img src="docs/screenshots/catalog.png" alt="Каталог: поиск модов на Modrinth и CurseForge"></td>
+  </tr>
+  <tr>
+    <td align="center">Моды: иконки, зависимости, клиентские моды</td>
+    <td align="center">Каталог: Modrinth, Hangar, CurseForge</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/diagnostics.png" alt="Диагностика краша: найден клиентский мод Sodium"></td>
+    <td><img src="docs/screenshots/schedule.png" alt="Расписание: TPS, плановые рестарты, ночные бэкапы"></td>
+  </tr>
+  <tr>
+    <td align="center">Диагностика: виновник краша и сжатый лог</td>
+    <td align="center">Расписание: TPS, рестарты, ночные бэкапы</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/new-server.png" alt="Мастер нового сервера"></td>
+    <td><img src="docs/screenshots/optimize.png" alt="Советы по оптимизации"></td>
+  </tr>
+  <tr>
+    <td align="center">Новый сервер: 10 ядер, любая версия</td>
+    <td align="center">Советы по оптимизации с кнопками</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/plugins-light.png" alt="Плагины в светлой теме"></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td align="center">Плагины, светлая тема</td>
+    <td></td>
+  </tr>
+</table>
 
 ## Что умеет
 
