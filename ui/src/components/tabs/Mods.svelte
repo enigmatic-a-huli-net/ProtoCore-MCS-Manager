@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ask } from "@tauri-apps/plugin-dialog";
+  import { ask, save } from "@tauri-apps/plugin-dialog";
   import Icon from "../Icon.svelte";
   import Catalog from "./Catalog.svelte";
   import Updates from "./Updates.svelte";
@@ -68,6 +68,27 @@
       await load();
     } catch (e) {
       fail(e);
+    }
+  }
+
+  // ---------- сборка для игроков
+  let expOpen = $state(false);
+  let expConfig = $state(false);
+  let exporting = $state(false);
+  async function exportPack() {
+    const safe = server.name.replace(/[\\/:*?"<>|]/g, "_");
+    const path = await save({ defaultPath: `${safe}.mrpack`, filters: [{ name: "Modrinth modpack", extensions: ["mrpack"] }] });
+    if (!path) return;
+    exporting = true;
+    try {
+      const r = await api.packExport(server.id, path, expConfig);
+      toast(t("exp.done", { linked: r.linked, embedded: r.embedded, client: r.client_added }), "ok");
+      expOpen = false;
+      api.revealPath(r.path).catch(() => {});
+    } catch (e) {
+      fail(e);
+    } finally {
+      exporting = false;
     }
   }
 
@@ -148,6 +169,9 @@
         {/each}
       </div>
       <span class="grow"></span>
+      <button class="btn sm" onclick={() => (expOpen = true)} title={t("exp.text")}>
+        <Icon name="archive" size={14} />{t("exp.button")}
+      </button>
       <button class="btn sm" onclick={() => removeClient(false)} title={t("mods.disableClient")}>
         <Icon name="shield" size={14} />{t("mods.disableClient")}
       </button>
@@ -289,12 +313,28 @@
   </div>
 {/if}
 
+{#if expOpen}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="backdrop" onclick={(e) => e.target === e.currentTarget && !exporting && (expOpen = false)}>
+    <div class="modal" role="dialog" aria-modal="true" aria-label={t("exp.title")}>
+      <h2>{t("exp.title")}</h2>
+      <p class="muted" style="margin:0">{t("exp.text")}</p>
+      <label class="check"><input type="checkbox" bind:checked={expConfig} />{t("exp.config")}</label>
+      <div class="actions">
+        <button class="btn" disabled={exporting} onclick={() => (expOpen = false)}>{t("act.cancel")}</button>
+        <button class="btn primary" disabled={exporting} onclick={exportPack}><Icon name="download" size={14} />{exporting ? "…" : t("exp.save")}</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .views { display: flex; gap: 2px; padding: 3px; background: var(--surface-2); border-radius: calc(var(--radius) * 0.8); width: max-content; }
   .views button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 0; border-radius: calc(var(--radius) * 0.6); background: none; color: var(--muted); font: inherit; font-size: 0.9em; cursor: pointer; }
   .views button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 0.15); }
   .wrapx { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 12px 16px 0; gap: 10px; }
-  .bar { display: flex; align-items: center; gap: 10px; }
+  .bar { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+  .bar .grow { min-width: 0; }
   .search { position: relative; flex: 0 1 230px; min-width: 140px; color: var(--muted); }
   .search :global(svg) { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); }
   .search input { padding-left: 30px; height: 2.1em; }

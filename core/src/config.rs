@@ -369,6 +369,8 @@ pub struct Config {
     pub curseforge_key: String,
     /// Папка по умолчанию для новых серверов
     pub servers_root: String,
+    /// Следить за качеством интернета (потери, задержка)
+    pub network_monitor: bool,
     /// Последний выбранный сервер
     pub selected: String,
     pub servers: Vec<ServerEntry>,
@@ -385,6 +387,7 @@ impl Default for Config {
             update_repo: crate::update::DEFAULT_REPO.into(),
             curseforge_key: String::new(),
             servers_root: String::new(),
+            network_monitor: true,
             selected: String::new(),
             servers: vec![],
         }

@@ -1,9 +1,9 @@
 // Общее состояние интерфейса (Svelte 5 runes).
-import { api, on, type BisectReport, type BisectStep, type Tps, type Kind, type Plan, type UpdateInfo, type AppSnapshot, type BackupEvent, type Config, type LogLine, type ServerEntry, type StatusInfo } from "./api";
+import { api, on, type NetReport, type BisectReport, type BisectStep, type Tps, type Kind, type Plan, type UpdateInfo, type AppSnapshot, type BackupEvent, type Config, type LogLine, type ServerEntry, type StatusInfo } from "./api";
 import { translate, type Key } from "./i18n";
 import { applyTheme } from "./theme";
 
-export type Tab = "console" | "diag" | "mods" | "plugins" | "backups" | "schedule" | "optimize" | "launch" | "properties";
+export type Tab = "console" | "network" | "diag" | "mods" | "plugins" | "backups" | "schedule" | "optimize" | "launch" | "properties";
 
 interface Toast { id: number; kind: "info" | "ok" | "error"; text: string }
 
@@ -29,6 +29,7 @@ export const app = $state({
   catalogProgress: null as { title: string; done: number; total: number } | null,
   createLog: [] as string[],
   tps: {} as Record<string, Tps>,
+  net: null as NetReport | null,
   bisect: {} as Record<string, { running: boolean; status: string; steps: BisectStep[]; report: BisectReport | null }>,
   createProgress: null as { done: number; total: number } | null,
 });
@@ -124,6 +125,11 @@ export async function init() {
   });
   await on<{ done: number; total: number }>("pcm://update", (p) => (app.updateProgress = p));
   app.ready = true;
+
+  // качество интернета: обновляем раз в 5 секунд, пока окно видно
+  const pollNet = () => !document.hidden && api.netReport().then((r) => (app.net = r)).catch(() => {});
+  pollNet();
+  setInterval(pollNet, 5000);
 
   // тихая проверка обновлений при запуске
   if (app.config!.check_updates) {

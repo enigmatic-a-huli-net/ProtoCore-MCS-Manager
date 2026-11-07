@@ -13,6 +13,7 @@
   let checkUpdates = $state(c.check_updates ?? true);
   let cfKey = $state(c.curseforge_key ?? "");
   let serversRoot = $state(c.servers_root ?? "");
+  let netmon = $state(c.network_monitor ?? true);
 
   // предпросмотр темы сразу, без сохранения
   $effect(() => applyTheme($state.snapshot(theme) as Theme));
@@ -32,7 +33,7 @@
 
   async function save() {
     try {
-      const settings = { language: lang, theme: $state.snapshot(theme) as Theme, close_to_tray: tray, console_lines: Number(lines), check_updates: checkUpdates, curseforge_key: cfKey, servers_root: serversRoot };
+      const settings = { language: lang, theme: $state.snapshot(theme) as Theme, close_to_tray: tray, console_lines: Number(lines), check_updates: checkUpdates, curseforge_key: cfKey, servers_root: serversRoot, network_monitor: netmon };
       await api.saveSettings(settings);
       Object.assign(app.config!, settings);
       toast(t("set.saved"), "ok");
@@ -128,6 +129,7 @@
   <section class="panel">
     <label class="check"><input type="checkbox" bind:checked={tray} />{t("set.tray")}</label>
     <label class="check"><input type="checkbox" bind:checked={checkUpdates} />{t("up.auto")}</label>
+    <label class="check"><input type="checkbox" bind:checked={netmon} />{t("set.netmon")}</label>
     <div class="grid">
       <label class="field"><span>{t("set.serversRoot")}</span><input bind:value={serversRoot} placeholder="D:\\Minecraft" /></label>
       <label class="field">

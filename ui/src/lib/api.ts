@@ -89,6 +89,7 @@ export interface Config {
   update_repo: string;
   curseforge_key: string;
   servers_root: string;
+  network_monitor: boolean;
   selected: string;
   servers: ServerEntry[];
 }
@@ -216,7 +217,7 @@ export interface BackupEvent {
 
 export const api = {
   state: () => invoke<AppSnapshot>("get_state"),
-  saveSettings: (settings: Pick<Config, "language" | "theme" | "close_to_tray" | "console_lines" | "check_updates" | "curseforge_key" | "servers_root">) =>
+  saveSettings: (settings: Pick<Config, "language" | "theme" | "close_to_tray" | "console_lines" | "check_updates" | "curseforge_key" | "servers_root" | "network_monitor">) =>
     invoke<void>("save_settings", { settings }),
   branding: () => invoke<{ logo: string | null; splash: string | null }>("get_branding"),
 
@@ -285,6 +286,16 @@ export const api = {
   bisectStart: (id: string, settings: BisectSettings) => invoke<void>("bisect_start", { id, settings }),
   bisectCancel: (id: string) => invoke<void>("bisect_cancel", { id }),
   bisectInfo: (id: string) => invoke<{ running: boolean; last: BisectReport | null; test_id: string }>("bisect_info", { id }),
+
+  netReport: () => invoke<NetReport>("net_report"),
+  connectInfo: (id: string, check: boolean) => invoke<ConnectInfo>("connect_info", { id, check }),
+  upnpOpen: (id: string) => invoke<number>("upnp_open", { id }),
+  upnpClose: (id: string) => invoke<void>("upnp_close", { id }),
+
+  packInspect: (path: string) => invoke<PackInfo>("modpack_inspect", { path }),
+  packImport: (req: { pack: string; name: string; dir: string; memory_mb: number; java_path: string; accept_eula: boolean }) =>
+    invoke<{ server: ServerEntry; result: ImportResult }>("modpack_import", { req }),
+  packExport: (id: string, path: string, includeConfig: boolean) => invoke<ExportResult>("modpack_export", { id, path, includeConfig }),
 
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
@@ -428,3 +439,21 @@ export interface BisectReport {
   cancelled: boolean;
   message: string;
 }
+
+export interface NetStats { samples: number; loss: number; avg_rtt: number; jitter: number; max_rtt: number; grade: "" | "good" | "fair" | "bad" }
+export interface NetSample { ts: number; rtt: (number | null)[] }
+export interface NetReport { enabled: boolean; targets: string[]; last_min: NetStats; last_10min: NetStats; last_hour: NetStats; samples: NetSample[] }
+export interface ConnectInfo {
+  local_ip: string;
+  public_ip: string;
+  port: number;
+  reachable: boolean | null;
+  router_ip: string;
+  upnp: boolean;
+  cgnat: boolean;
+  notes: string[];
+}
+
+export interface PackInfo { format: "modrinth" | "curseforge"; name: string; version: string; mc: string; core: CoreKind; loader_version: string; files: number; server_files: number; client_only: number; needs_cf_key: boolean }
+export interface ImportResult { downloaded: number; skipped_client: number; overrides: number; manual: [string, string][]; failed: string[] }
+export interface ExportResult { path: string; linked: number; embedded: number; client_added: number; server_only: number; size: number }

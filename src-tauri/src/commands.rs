@@ -79,6 +79,12 @@ pub struct AppSettings {
     curseforge_key: String,
     #[serde(default)]
     servers_root: String,
+    #[serde(default = "yes")]
+    network_monitor: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[tauri::command]
@@ -92,6 +98,7 @@ pub fn save_settings(state: State<AppState>, settings: AppSettings) -> R<()> {
         c.check_updates = settings.check_updates;
         c.curseforge_key = catalog_key(&settings.curseforge_key);
         c.servers_root = settings.servers_root.trim().to_string();
+        c.network_monitor = settings.network_monitor;
     }
     state.save()
 }
@@ -1057,6 +1064,189 @@ pub async fn get_advice(app: AppHandle, id: String) -> R<Vec<pcm_core::advice::A
             java_major,
             lag_warnings: lag,
         }))
+    })
+    .await
+}
+
+// ===================================================================== сеть
+
+#[tauri::command]
+pub fn net_report(app: AppHandle) -> crate::netmon::NetReport {
+    crate::netmon::report(&app)
+}
+
+fn server_port(state: &AppState, id: &str) -> R<u16> {
+    let s = server_of(state, id)?;
+    Ok(props::read(&s.dir())
+        .iter()
+        .find(|(k, _)| k == "server-port")
+        .and_then(|(_, v)| v.parse().ok())
+        .unwrap_or(25565))
+}
+
+#[tauri::command]
+pub async fn connect_info(app: AppHandle, id: String, check: bool) -> R<pcm_core::network::ConnectInfo> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let port = server_port(&state, &id)?;
+        // проверка снаружи имеет смысл, только когда сервер слушает порт
+        let check = check && state.pm.status(&id).status == pcm_core::process::Status::Running;
+        Ok(pcm_core::network::connect_info(port, check))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn upnp_open(app: AppHandle, id: String) -> R<u16> {
+    bg(move || {
+        let port = server_port(&app.state::<AppState>(), &id)?;
+        pcm_core::network::upnp_open(port).map_err(e)?;
+        Ok(port)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn upnp_close(app: AppHandle, id: String) -> R<()> {
+    bg(move || {
+        let port = server_port(&app.state::<AppState>(), &id)?;
+        pcm_core::network::upnp_close(port).map_err(e)
+    })
+    .await
+}
+
+// ===================================================================== сборки
+
+#[tauri::command]
+pub async fn modpack_inspect(path: String) -> R<pcm_core::modpack::PackInfo> {
+    bg(move || pcm_core::modpack::inspect(&PathBuf::from(path)).map_err(e)).await
+}
+
+#[derive(Deserialize)]
+pub struct ImportReq {
+    pack: String,
+    name: String,
+    dir: String,
+    memory_mb: u32,
+    java_path: String,
+    accept_eula: bool,
+}
+
+#[derive(Serialize)]
+pub struct ImportOut {
+    server: ServerEntry,
+    result: pcm_core::modpack::ImportResult,
+}
+
+/// Новый сервер из сборки: ядро нужной версии + файлы сборки.
+#[tauri::command]
+pub async fn modpack_import(app: AppHandle, req: ImportReq) -> R<ImportOut> {
+    bg(move || {
+        use pcm_core::modpack;
+        let state = app.state::<AppState>();
+        let pack = PathBuf::from(&req.pack);
+        let info = modpack::inspect(&pack).map_err(e)?;
+        let dir = PathBuf::from(req.dir.trim());
+        if dir.is_dir() && std::fs::read_dir(&dir).map(|mut d| d.next().is_some()).unwrap_or(false) {
+            return Err("папка не пустая — выбери новую или пустую папку".into());
+        }
+        let java = if req.java_path.trim().is_empty() { "java".to_string() } else { req.java_path.trim().to_string() };
+        let cf_key = state.config.lock().unwrap().curseforge_key.clone();
+        let (mut log, mut progress) = create_emitter(&app, "new");
+        log(format!("📦 {} {} — {} {} · Minecraft {}", info.name, info.version, info.core.label(), info.loader_version, info.mc));
+        let core_res = cores::install(info.core, &info.mc, &info.loader_version, &dir, &java, &mut log, &mut progress).map_err(e)?;
+        log("⬇ Файлы сборки…".into());
+        let result = modpack::import_files(&pack, &dir, &cf_key, |i, n, name| {
+            progress(i as u64, n as u64);
+            if i % 10 == 0 || i == n {
+                log(format!("  {i}/{n} {name}"));
+            }
+        })
+        .map_err(e)?;
+        log(format!(
+            "✔ Скачано {}, пропущено клиентских {}, файлов настроек {}{}",
+            result.downloaded,
+            result.skipped_client,
+            result.overrides,
+            if result.manual.is_empty() { String::new() } else { format!(", вручную: {}", result.manual.len()) }
+        ));
+        cores::write_defaults(&dir, info.core, req.accept_eula, &info.name).map_err(e)?;
+
+        let d = detect::detect(&dir);
+        let mut s = ServerEntry {
+            id: util::short_id(),
+            name: if req.name.trim().is_empty() { info.name.clone() } else { req.name.trim().to_string() },
+            path: dir.to_string_lossy().to_string(),
+            ..Default::default()
+        };
+        s.backup.password = util::random_password();
+        apply_detection(&mut s, &d);
+        if s.core == CoreKind::Unknown {
+            s.core = info.core;
+        }
+        if s.mc_version.is_empty() {
+            s.mc_version = info.mc.clone();
+        }
+        if s.loader_version.is_empty() {
+            s.loader_version = core_res.build.clone();
+        }
+        s.launch.memory_mb = req.memory_mb.max(2048);
+        s.launch.java_path = req.java_path.trim().to_string();
+        if let (Some(j), detect::LaunchTarget::None) = (&core_res.jar, &d.target) {
+            s.launch.jar_override = j.clone();
+        }
+        {
+            let mut c = state.config.lock().unwrap();
+            c.selected = s.id.clone();
+            c.servers.push(s.clone());
+        }
+        state.save()?;
+        Ok(ImportOut { server: s, result })
+    })
+    .await
+}
+
+/// Версия NeoForge/Forge для клиентской сборки: у гибридов (Youer) её нет в имени ядра.
+fn loader_version_for_pack(s: &ServerEntry) -> String {
+    match s.core {
+        CoreKind::NeoForge | CoreKind::Forge | CoreKind::Fabric | CoreKind::Quilt => s.loader_version.clone(),
+        _ => {
+            let neo = s.dir().join("libraries/net/neoforged/neoforge");
+            let mut v: Vec<String> = std::fs::read_dir(&neo)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            v.sort_by(|a, b| detect::version_cmp(a, b));
+            v.pop().or_else(|| {
+                let core = if s.core == CoreKind::Mohist { CoreKind::Forge } else { CoreKind::NeoForge };
+                cores::builds(core, &s.mc_version).ok().and_then(|b| b.iter().find(|x| x.stable).map(|x| x.id.clone()))
+            })
+            .unwrap_or_default()
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn modpack_export(app: AppHandle, id: String, path: String, include_config: bool) -> R<pcm_core::modpack::ExportResult> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        let core = match s.core {
+            CoreKind::Youer | CoreKind::Arclight => CoreKind::NeoForge,
+            CoreKind::Mohist => CoreKind::Forge,
+            c => c,
+        };
+        let opt = pcm_core::modpack::ExportOptions {
+            name: s.name.clone(),
+            version: chrono::Local::now().format("%Y.%m.%d").to_string(),
+            mc: s.mc_version.clone(),
+            core,
+            loader_version: loader_version_for_pack(&s),
+            include_config,
+        };
+        pcm_core::modpack::export_client(&s.dir(), &s.mods, &opt, &PathBuf::from(path)).map_err(e)
     })
     .await
 }

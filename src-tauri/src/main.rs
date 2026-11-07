@@ -10,6 +10,7 @@
 
 mod bisect_run;
 mod commands;
+mod netmon;
 mod scheduler;
 mod state;
 
@@ -85,6 +86,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(scheduler::Sched::default())
+        .manage(netmon::NetMon::default())
         .manage(bisect_run::BisectState::default())
         .manage(AppState {
             paths,
@@ -98,6 +100,7 @@ fn main() {
         .setup(move |app| {
             let _ = sink.app.set(app.handle().clone());
             scheduler::start(app.handle().clone());
+            netmon::start(app.handle().clone());
 
             let open = MenuItem::with_id(app, "open", "Открыть / Open", true, None::<&str>)?;
             let exit = MenuItem::with_id(app, "quit", "Выход / Quit", true, None::<&str>)?;
@@ -191,6 +194,13 @@ fn main() {
             commands::bisect_cancel,
             commands::bisect_info,
             commands::get_advice,
+            commands::net_report,
+            commands::modpack_inspect,
+            commands::modpack_import,
+            commands::modpack_export,
+            commands::connect_info,
+            commands::upnp_open,
+            commands::upnp_close,
             commands::analyze_logs,
             commands::save_compressed,
             commands::quarantine_mod,
