@@ -1,6 +1,8 @@
 <script lang="ts">
   import Icon from "../Icon.svelte";
   import Bisect from "./Bisect.svelte";
+  import Preflight from "./Preflight.svelte";
+  import Logs from "./Logs.svelte";
   import { api, supportsMods, type Analysis, type Culprit, type ServerEntry } from "../../lib/api";
   import { app, t, toast, fail } from "../../lib/store.svelte";
   import type { Key } from "../../lib/i18n";
@@ -77,6 +79,7 @@
 </script>
 
 <div class="wrapx scroll">
+  <Preflight {server} />
   <div class="bar">
     <div class="seg">
       {#each sources as s}
@@ -167,6 +170,7 @@
   {:else if loading}
     <div class="empty">…</div>
   {/if}
+  <Logs {server} />
   {#if supportsMods(server.core)}<Bisect {server} />{/if}
 </div>
 

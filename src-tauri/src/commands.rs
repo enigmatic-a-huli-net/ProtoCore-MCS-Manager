@@ -382,6 +382,19 @@ fn start_inner(app: &AppHandle, id: &str, allow_snapshot: bool) -> R<()> {
         return Err("EULA_REQUIRED".into());
     }
 
+    // 0. проверка перед запуском: то, из-за чего сервер точно не запустится
+    let checks = pcm_core::preflight::run(&s, false);
+    let blocking = pcm_core::preflight::blocking(&checks);
+    if !blocking.is_empty() {
+        for c in &blocking {
+            state.pm.system(id, format!("⛔ {}: {}", c.title, c.detail));
+        }
+        return Err(format!("Запуск отменён: {}", blocking.iter().map(|c| c.title.clone()).collect::<Vec<_>>().join("; ")));
+    }
+    for c in checks.iter().filter(|c| c.level == pcm_core::preflight::Level::Warn && c.id != "eula") {
+        state.pm.system(id, format!("⚠ {}: {}", c.title, c.detail));
+    }
+
     // 1. убрать клиентские моды
     if s.mods.auto_disable_client && s.core.supports_mods() && s.dir().join(mods::ENABLED_DIR).is_dir() {
         match mods::disable_client_mods(&s.dir(), s.core.mod_loader(), &s.mods, s.mods.disable_blacklisted) {
@@ -987,11 +1000,11 @@ pub async fn catalog_plan(app: AppHandle, id: String, kind: Kind, source: Source
 }
 
 #[derive(Clone, Serialize)]
-struct CatalogEvent {
-    id: String,
-    title: String,
-    done: u64,
-    total: u64,
+pub struct CatalogEvent {
+    pub id: String,
+    pub title: String,
+    pub done: u64,
+    pub total: u64,
 }
 
 #[tauri::command]
@@ -1566,4 +1579,107 @@ pub async fn verify_repo(app: AppHandle, id: String) -> R<String> {
 #[tauri::command]
 pub fn get_changes(state: State<AppState>, id: String) -> Vec<pcm_core::changes::Change> {
     pcm_core::changes::recent(&state.paths.data, &id, 300)
+}
+
+// ===================================================================== Java, проверка перед запуском, логи, песочница
+
+#[tauri::command]
+pub async fn java_list() -> R<Vec<pcm_core::java::JavaInstall>> {
+    bg(|| Ok(pcm_core::java::scan())).await
+}
+
+#[derive(Clone, Serialize)]
+struct JavaEvent {
+    major: u32,
+    done: u64,
+    total: u64,
+}
+
+#[tauri::command]
+pub async fn java_download(app: AppHandle, major: u32) -> R<pcm_core::java::JavaInstall> {
+    bg(move || {
+        let mut last = std::time::Instant::now();
+        pcm_core::java::download_temurin(major, |done, total| {
+            if last.elapsed() > Duration::from_millis(250) || done == total {
+                last = std::time::Instant::now();
+                let _ = app.emit("pcm://java", JavaEvent { major, done, total });
+            }
+        })
+        .map_err(e)
+    })
+    .await
+}
+
+#[derive(Serialize)]
+pub struct JavaNeed {
+    required: Option<u32>,
+    mc_version: String,
+}
+
+#[tauri::command]
+pub fn java_required(state: State<AppState>, id: String) -> R<JavaNeed> {
+    let s = server_of(&state, &id)?;
+    let mc = if s.mc_version.is_empty() { detect::detect(&s.dir()).mc_version } else { s.mc_version.clone() };
+    Ok(JavaNeed { required: pcm_core::java::required_for(&mc), mc_version: mc })
+}
+
+#[tauri::command]
+pub async fn preflight(app: AppHandle, id: String) -> R<Vec<pcm_core::preflight::Check>> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let s = server_of(&state, &id)?;
+        Ok(pcm_core::preflight::run(&s, state.pm.is_running(&id)))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn logs_info(app: AppHandle, id: String) -> R<pcm_core::logs::LogsInfo> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        Ok(pcm_core::logs::list(&server_of(&state, &id)?.dir()))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn logs_search(app: AppHandle, id: String, query: String) -> R<Vec<pcm_core::logs::Hit>> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        Ok(pcm_core::logs::search(&server_of(&state, &id)?.dir(), &query, 500))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn logs_clean(app: AppHandle, id: String, days: u32) -> R<pcm_core::logs::CleanResult> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        pcm_core::logs::clean(&server_of(&state, &id)?.dir(), days).map_err(e)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn sandbox_update(app: AppHandle, id: String, plan: Plan) -> R<crate::bisect_run::SandboxResult> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let t = target(&state, &id, Kind::Mod)?;
+        let r = crate::bisect_run::sandbox_update(&app, &id, &plan, t)?;
+        if r.ok {
+            let replaced: Vec<String> = plan.items.iter().filter_map(|i| i.replaces.clone()).collect();
+            journal(&state, &id, "mods", format!("Обновлено после проверки в копии: {} (заменены: {})", r.installed.join(", "), replaced.join(", ")));
+            state.pm.system(&id, format!("✔ Обновления проверены в копии и установлены: {}", r.installed.len()));
+        } else {
+            state.pm.system(&id, format!("✖ Проверка обновлений: {}", r.message));
+        }
+        Ok(r)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn set_simple_mode(state: State<AppState>, on: bool) -> R<()> {
+    state.config.lock().unwrap().simple_mode = on;
+    state.save()
 }

@@ -27,6 +27,7 @@ export const app = $state({
   /** открытый диалог установки */
   plan: null as { id: string; kind: Kind; plan: Plan; onDone?: () => void } | null,
   catalogProgress: null as { title: string; done: number; total: number } | null,
+  javaProgress: null as { major: number; done: number; total: number } | null,
   createLog: [] as string[],
   tps: {} as Record<string, Tps>,
   net: null as NetReport | null,
@@ -119,6 +120,7 @@ export async function init() {
     if (ev.type === "done") { b.running = false; b.report = ev.report ?? null; b.status = ""; }
   });
   await on<{ id: string; title: string; done: number; total: number }>("pcm://catalog", (p) => (app.catalogProgress = p));
+  await on<{ major: number; done: number; total: number }>("pcm://java", (p) => (app.javaProgress = p));
   await on<{ id: string; line: string | null; done: number; total: number }>("pcm://create", (p) => {
     if (p.line) app.createLog = [...app.createLog.slice(-200), p.line];
     else app.createProgress = { done: p.done, total: p.total };

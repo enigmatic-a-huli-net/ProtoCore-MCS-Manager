@@ -94,6 +94,7 @@ export interface Config {
   curseforge_key: string;
   servers_root: string;
   network_monitor: boolean;
+  simple_mode: boolean;
   notify: NotifySettings;
   selected: string;
   servers: ServerEntry[];
@@ -291,6 +292,15 @@ export const api = {
     invoke<Plan>("catalog_plan", { id, kind, source, project, version: version ?? null }),
   catApply: (id: string, kind: Kind, plan: Plan) => invoke<string[]>("catalog_apply", { id, kind, plan }),
   catUpdates: (id: string, kind: Kind) => invoke<UpdatesReport>("catalog_updates", { id, kind }),
+  sandboxUpdate: (id: string, plan: Plan) => invoke<SandboxResult>("sandbox_update", { id, plan }),
+  javaList: () => invoke<JavaInstall[]>("java_list"),
+  javaDownload: (major: number) => invoke<JavaInstall>("java_download", { major }),
+  javaRequired: (id: string) => invoke<{ required: number | null; mc_version: string }>("java_required", { id }),
+  preflight: (id: string) => invoke<PreCheck[]>("preflight", { id }),
+  logsInfo: (id: string) => invoke<{ files: LogFile[]; total: number }>("logs_info", { id }),
+  logsSearch: (id: string, query: string) => invoke<LogHit[]>("logs_search", { id, query }),
+  logsClean: (id: string, days: number) => invoke<CleanResult>("logs_clean", { id, days }),
+  setSimpleMode: (on: boolean) => invoke<void>("set_simple_mode", { on }),
   openPath: (path: string) => invoke<void>("open_path", { path, reveal: false }),
   revealPath: (path: string) => invoke<void>("open_path", { path, reveal: true }),
   checkCfKey: (key: string) => invoke<string>("check_cf_key", { key }),
@@ -423,6 +433,13 @@ export interface FileRef {
 
 export interface PlanItem { title: string; icon_url: string; file: FileRef; reason: "selected" | "dependency" | "update" | "fix"; replaces: string | null }
 export interface Plan { items: PlanItem[]; already: string[]; warnings: string[] }
+
+export interface JavaInstall { path: string; major: number; version: string; vendor: string; source: string }
+export interface PreCheck { id: string; level: "error" | "warn" | "ok"; title: string; detail: string; fix: string }
+export interface LogFile { rel: string; size: number; mtime: number; gz: boolean }
+export interface LogHit { rel: string; line: number; text: string }
+export interface CleanResult { compressed: number; deleted: number; freed: number }
+export interface SandboxResult { ok: boolean; message: string; installed: string[] }
 export interface UpdateItem { file: string; title: string; icon_url: string; current: string; latest: FileRef; prerelease: boolean }
 export interface UpdatesReport { updates: UpdateItem[]; unknown: string[]; checked: number }
 

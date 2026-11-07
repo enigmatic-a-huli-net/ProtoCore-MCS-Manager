@@ -56,17 +56,36 @@
     if (await ask(t("confirm.kill"), { kind: "warning" })) api.kill(server.id).catch(fail);
   }
 
+  const simple = $derived(!!app.config?.simple_mode);
+  async function toggleSimple() {
+    const on = !simple;
+    try {
+      await api.setSimpleMode(on);
+      if (app.config) app.config.simple_mode = on;
+    } catch (e) {
+      fail(e);
+    }
+  }
+  // колесо мыши прокручивает строку вкладок по горизонтали
+  function wheel(e: WheelEvent) {
+    const el = e.currentTarget as HTMLElement;
+    if (el.scrollWidth > el.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      el.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }
+  }
+
   const tabs = $derived(
     [
       { id: "console", icon: "terminal", show: true },
       { id: "players", icon: "user", show: server.core !== "unknown" },
-      { id: "network", icon: "link", show: true },
+      { id: "network", icon: "link", show: !simple },
       { id: "diag", icon: "alert", show: true },
       { id: "mods", icon: "puzzle", show: supportsMods(server.core) || server.core === "unknown" },
       { id: "plugins", icon: "plug", show: supportsPlugins(server.core) },
       { id: "backups", icon: "archive", show: true },
-      { id: "schedule", icon: "restart", show: true },
-      { id: "optimize", icon: "rocket", show: true },
+      { id: "schedule", icon: "restart", show: !simple },
+      { id: "optimize", icon: "rocket", show: !simple },
       { id: "launch", icon: "sliders", show: true },
       { id: "properties", icon: "file", show: true },
     ].filter((x) => x.show) as { id: Tab; icon: string }[],
@@ -140,13 +159,16 @@
     </div>
   {/if}
 
-  <nav class="tabs">
+  <div class="tabsbar">
+  <nav class="tabs" onwheel={wheel}>
     {#each tabs as tb (tb.id)}
       <button class:active={app.tab === tb.id} onclick={() => (app.tab = tb.id)}>
         <Icon name={tb.icon} size={15} />{t(`tab.${tb.id}` as Key)}
       </button>
     {/each}
   </nav>
+  <button class="mode" title={t(simple ? "sm.moreHint" : "sm.lessHint")} onclick={toggleSimple}>{simple ? t("sm.more") : t("sm.less")}</button>
+  </div>
 
   <div class="content">
     {#if app.tab === "console"}<Console {server} />
@@ -231,7 +253,8 @@
   .progress .bar { position: absolute; inset: 0 auto 0 0; background: var(--accent-soft); transition: width 0.25s; }
   .progress span { position: relative; display: block; padding: 3px 10px; font-size: 0.82em; color: var(--muted); }
 
-  .tabs { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+  .tabsbar { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+  .tabs { flex: 1; min-width: 0; display: flex; gap: 2px; padding: 0 16px; overflow-x: auto; scrollbar-width: none; mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
   .tabs::-webkit-scrollbar { display: none; }
   .tabs button { flex: none; }
   .tabs button {
@@ -248,6 +271,8 @@
     cursor: pointer;
   }
   .tabs button:hover { color: var(--text); }
+  .mode { flex: none; margin: 0 12px 0 4px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: none; color: var(--muted); font: inherit; font-size: 0.8em; cursor: pointer; white-space: nowrap; }
+  .mode:hover { color: var(--text); border-color: var(--accent); }
   .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
   .content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 

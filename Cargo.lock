@@ -2561,6 +2561,7 @@ version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "flate2",
  "igd-next",
  "image",
  "log",
@@ -2570,6 +2571,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha1_smol",
+ "sha2",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.21",

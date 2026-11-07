@@ -179,3 +179,102 @@ pub fn start(app: AppHandle, id: String, settings: BisectSettings) -> Result<(),
     });
     Ok(())
 }
+
+// ===================================================================== обновления в песочнице
+
+#[derive(Serialize)]
+pub struct SandboxResult {
+    pub ok: bool,
+    pub message: String,
+    pub installed: Vec<String>,
+}
+
+fn test_entry(server: &ServerEntry, real: &std::path::Path, test: &std::path::Path, tid: &str) -> Result<ServerEntry, String> {
+    let mut entry = server.clone();
+    entry.id = tid.to_string();
+    entry.path = test.to_string_lossy().to_string();
+    if entry.launch.mode == LaunchMode::Script {
+        let p = PathBuf::from(&entry.launch.script);
+        if p.is_absolute() {
+            let rel = p
+                .strip_prefix(real)
+                .map_err(|_| "скрипт запуска лежит вне папки сервера — для проверки в копии выбери режим «Собрать команду»".to_string())?;
+            entry.launch.script = rel.to_string_lossy().to_string();
+        }
+    }
+    Ok(entry)
+}
+
+/// Скачать обновления в тестовую копию, запустить её и только при успешном
+/// запуске перенести новые файлы в настоящий сервер. Блокирующая.
+pub fn sandbox_update(app: &AppHandle, id: &str, plan: &pcm_core::catalog::Plan, target: pcm_core::catalog::Target) -> Result<SandboxResult, String> {
+    let state = app.state::<AppState>();
+    let bs = app.state::<BisectState>();
+    let server = state.config.lock().unwrap().server(id).cloned().ok_or("сервер не найден")?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut r = bs.running.lock().unwrap();
+        if r.contains_key(id) {
+            return Err("уже идёт автоперебор или другая проверка в копии".into());
+        }
+        r.insert(id.to_string(), cancel.clone());
+    }
+    let real = server.dir();
+    let test = bisect::test_dir_for(&real);
+    let tid = test_id(id);
+    let result = (|| -> Result<SandboxResult, String> {
+        state.pm.system(id, "🧪 Готовлю тестовую копию для проверки обновлений…");
+        bisect::prepare_copy(&real, &test).map_err(|e| e.to_string())?;
+        let replaced: BTreeSet<String> = plan.items.iter().filter_map(|i| i.replaces.clone()).collect();
+        let mut files: BTreeSet<String> = pcm_core::util::list_jars(&real.join("mods"))
+            .iter()
+            .map(|p| pcm_core::util::file_name(p))
+            .filter(|n| !replaced.contains(n))
+            .collect();
+        bisect::set_mods(&real, &test, &files).map_err(|e| e.to_string())?;
+        let mut tt = target.clone();
+        tt.dir = test.join("mods");
+        tt.old_dir = test.join("mods_old");
+        let mut last = Instant::now();
+        let new_files = pcm_core::catalog::apply(&tt, plan, |title, done, total| {
+            if last.elapsed() > Duration::from_millis(200) || done == total {
+                last = Instant::now();
+                let _ = app.emit("pcm://catalog", crate::commands::CatalogEvent { id: id.to_string(), title: title.into(), done, total });
+            }
+        })
+        .map_err(|e| e.to_string())?;
+        files.extend(new_files.iter().cloned());
+        state.pm.system(id, format!("🧪 Пробный запуск копии с {} обновлениями (консоль — во вкладке «Диагностика» → автоперебор)", new_files.len()));
+        let mut runner = TauriRunner {
+            app: app.clone(),
+            id: id.to_string(),
+            tid: tid.clone(),
+            entry: test_entry(&server, &real, &test, &tid)?,
+            real: real.clone(),
+            test: test.clone(),
+            timeout: Duration::from_secs(600),
+            cancel: cancel.clone(),
+        };
+        match runner.run("Проверка обновлений", &files) {
+            Outcome::Ok => {}
+            Outcome::Crash(why) => return Ok(SandboxResult { ok: false, message: format!("копия с обновлениями упала: {why}. Настоящий сервер не тронут."), installed: vec![] }),
+            Outcome::Hang => return Ok(SandboxResult { ok: false, message: "копия с обновлениями не запустилась за 10 минут. Настоящий сервер не тронут.".into(), installed: vec![] }),
+            Outcome::Error(e) => return Err(e),
+        }
+        // успех — переносим проверенные файлы
+        std::fs::create_dir_all(&target.dir).map_err(|e| e.to_string())?;
+        for f in &new_files {
+            std::fs::copy(test.join("mods").join(f), target.dir.join(f)).map_err(|e| e.to_string())?;
+        }
+        for old in &replaced {
+            let p = target.dir.join(old);
+            if p.is_file() && !new_files.contains(old) {
+                pcm_core::util::move_file(&p, &target.old_dir).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(SandboxResult { ok: true, message: format!("копия запустилась — установлено обновлений: {}", new_files.len()), installed: new_files })
+    })();
+    let _ = std::fs::remove_dir_all(&test);
+    bs.running.lock().unwrap().remove(id);
+    result
+}

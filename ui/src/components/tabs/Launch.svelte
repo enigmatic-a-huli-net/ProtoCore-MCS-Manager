@@ -1,7 +1,8 @@
 <script lang="ts">
   import { open as pick, ask } from "@tauri-apps/plugin-dialog";
   import Icon from "../Icon.svelte";
-  import { api, CORE_LABEL, DOWNLOADABLE, supportsMods, type CoreKind, type ServerEntry } from "../../lib/api";
+  import Hint from "../Hint.svelte";
+  import { api, CORE_LABEL, DOWNLOADABLE, supportsMods, type CoreKind, type JavaInstall, type ServerEntry } from "../../lib/api";
   import { app, status, t, toast, fail, saveServer, refreshState } from "../../lib/store.svelte";
 
   let { server }: { server: ServerEntry } = $props();
@@ -24,6 +25,47 @@
     }
   }
   loadPreview();
+
+  // ---------- Java
+  let javas = $state<JavaInstall[]>([]);
+  let need = $state<{ required: number | null; mc_version: string } | null>(null);
+  let jdl = $state(false);
+  async function loadJava() {
+    try {
+      [javas, need] = await Promise.all([api.javaList(), api.javaRequired(server.id)]);
+    } catch (e) {
+      fail(e);
+    }
+  }
+  loadJava();
+  const req = $derived(need?.required ?? null);
+  const autoPick = $derived.by(() => {
+    if (!req) return null;
+    const exact = javas.filter((j) => j.major === req);
+    if (exact.length) return exact[0];
+    return req === 8 ? null : (javas.filter((j) => j.major > req).sort((a, b) => a.major - b.major)[0] ?? null);
+  });
+  const chosen = $derived(s.launch.java_path.trim() ? javas.find((j) => j.path === s.launch.java_path.trim()) : autoPick);
+  const javaBad = $derived(!!req && !!chosen && (chosen.major < req || (req === 8 && chosen.major > 8)));
+  async function downloadJava() {
+    if (!req) return;
+    jdl = true;
+    app.javaProgress = null;
+    try {
+      const j = await api.javaDownload(req);
+      toast(t("jv.downloaded", { v: j.version }), "ok");
+      if (s.launch.java_path.trim()) s.launch.java_path = j.path;
+      await loadJava();
+      loadPreview();
+    } catch (e) {
+      fail(e);
+    } finally {
+      jdl = false;
+      app.javaProgress = null;
+    }
+  }
+  const srcLabel = (x: string) => t(`jv.src.${x}` as any) as string;
+
   api.detect(server.path).then((d) => (scripts = d.scripts)).catch(() => {});
 
   const ids = (x: string) => x.split(",").map((v) => v.trim()).filter(Boolean);
@@ -177,21 +219,41 @@
     {:else}
       <div class="grid2">
         <label class="field">
-          <span>{t("ln.java")}</span>
+          <span>{t("ln.java")}<Hint text={t("jv.hint")} /></span>
           <div class="row">
-            <input bind:value={s.launch.java_path} placeholder="java" />
+            <select bind:value={s.launch.java_path} class="grow">
+              <option value="">{autoPick ? t("jv.autoIs", { v: autoPick.major }) : t("jv.auto")}</option>
+              {#each javas as j (j.path)}
+                <option value={j.path}>Java {j.major} · {j.vendor || "?"} · {srcLabel(j.source)}</option>
+              {/each}
+              {#if s.launch.java_path && !javas.some((j) => j.path === s.launch.java_path)}
+                <option value={s.launch.java_path}>{s.launch.java_path}</option>
+              {/if}
+            </select>
             <button type="button" class="btn" onclick={chooseJava}>{t("act.browse")}</button>
           </div>
+          {#if req}
+            <span class="jv" class:bad={javaBad || !chosen}>
+              {#if javaBad}{t("jv.wrong", { mc: need?.mc_version ?? "", req, have: chosen?.major ?? 0 })}
+              {:else if !chosen}{t("jv.missing", { mc: need?.mc_version ?? "", req })}
+              {:else}<Icon name="check" size={12} />{t("jv.ok", { mc: need?.mc_version ?? "", req })}{/if}
+              {#if javaBad || !chosen}
+                <button type="button" class="btn sm" disabled={jdl} onclick={downloadJava}>
+                  <Icon name="download" size={13} />{jdl ? (app.javaProgress?.total ? `${Math.round((app.javaProgress.done / app.javaProgress.total) * 100)}%` : "…") : t("jv.download", { v: req })}
+                </button>
+              {/if}
+            </span>
+          {/if}
         </label>
         <label class="field">
-          <span>{t("ln.memory")} — {memGb} GB</span>
+          <span>{t("ln.memory")} — {memGb} GB<Hint text={t("hn.memory")} /></span>
           <div class="row">
             <input type="range" min="1024" max="32768" step="512" bind:value={s.launch.memory_mb} class="grow" />
             <input type="number" min="512" step="512" bind:value={s.launch.memory_mb} style="width:7em" />
           </div>
         </label>
         <label class="field">
-          <span>{t("ln.preset")}</span>
+          <span>{t("ln.preset")}<Hint text={t("hn.preset")} /></span>
           <select bind:value={s.launch.jvm_preset}>
             <option value="aikar">{t("ln.aikar")}</option>
             <option value="zgc">{t("ln.zgc")}</option>
@@ -218,14 +280,14 @@
   {#if supportsMods(s.core) || s.core === "unknown"}
     <section class="panel">
       <h3>{t("ln.modsBlock")}</h3>
-      <label class="check"><input type="checkbox" bind:checked={s.mods.auto_disable_client} />{t("ln.autoClient")}</label>
+      <label class="check"><input type="checkbox" bind:checked={s.mods.auto_disable_client} />{t("ln.autoClient")}<Hint text={t("hn.client")} /></label>
       <label class="check indent"><input type="checkbox" bind:checked={s.mods.disable_blacklisted} disabled={!s.mods.auto_disable_client} />{t("ln.autoClientLikely")}</label>
       <div class="grid2">
         <label class="field"><span>{t("ln.extraClient")}</span><input bind:value={extraClient} placeholder="mymod, othermod" /></label>
         <label class="field"><span>{t("ln.neverDisable")}</span><input bind:value={never} placeholder="journeymap" /></label>
       </div>
       <h3 class="sub">{t("ln.quarantine")}</h3>
-      <label class="check"><input type="checkbox" bind:checked={s.mods.auto_quarantine} />{t("ln.qAuto")}</label>
+      <label class="check"><input type="checkbox" bind:checked={s.mods.auto_quarantine} />{t("ln.qAuto")}<Hint text={t("hn.quarantine")} /></label>
       {#if s.mods.auto_quarantine}
         <label class="check indent"><input type="checkbox" bind:checked={s.mods.quarantine_restart} />{t("ln.qRestart")}</label>
         <label class="check indent"><input type="checkbox" bind:checked={s.mods.quarantine_content} />{t("ln.qContent")}</label>
@@ -243,6 +305,8 @@
 </form>
 
 <style>
+  .jv { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.85em; color: var(--ok); }
+  .jv.bad { color: var(--warn); }
   .wrapx { flex: 1; padding: 14px 16px 20px; display: grid; align-content: start; gap: 14px; max-width: 920px; }
   section { padding: 16px 18px; display: grid; gap: 12px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }

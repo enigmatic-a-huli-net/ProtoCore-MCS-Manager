@@ -125,7 +125,9 @@ pub fn build(server: &ServerEntry) -> Result<LaunchCommand> {
         }
         LaunchMode::Auto => {
             let java = if l.java_path.trim().is_empty() {
-                "java".to_string()
+                // путь не указан — подбираем Java под версию Minecraft среди установленных
+                let mc = if server.mc_version.is_empty() { detect::detect(&dir).mc_version } else { server.mc_version.clone() };
+                crate::java::auto_java(&mc).unwrap_or_else(|| "java".to_string())
             } else {
                 l.java_path.trim().to_string()
             };

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ask } from "@tauri-apps/plugin-dialog";
   import Icon from "../Icon.svelte";
+  import Hint from "../Hint.svelte";
   import { api, bytes, type Change, type ServerEntry, type SnapDiff, type SnapEntry, type Snapshot } from "../../lib/api";
   import { app, status, t, toast, fail, saveServer } from "../../lib/store.svelte";
   import type { Key } from "../../lib/i18n";
@@ -307,9 +308,9 @@
 
   <form class="panel settings" onsubmit={(e) => { e.preventDefault(); saveForm(); }}>
     <h3>{t("bk.settings")}</h3>
-    <label class="check"><input type="checkbox" bind:checked={form.on} />{t("bk.onStart")}</label>
+    <label class="check"><input type="checkbox" bind:checked={form.on} />{t("bk.onStart")}<Hint text={t("hn.snapshot")} /></label>
     <div class="grid">
-      <label class="field"><span>{t("bk.keep")}</span><input type="number" min="0" bind:value={form.keep} /></label>
+      <label class="field"><span>{t("bk.keep")}<Hint text={t("hn.keep")} /></span><input type="number" min="0" bind:value={form.keep} /></label>
       <label class="field"><span>{t("bk.repoPath")}</span><input bind:value={form.repo} placeholder={app.paths?.restic_root} /></label>
     </div>
     <label class="field"><span>{t("bk.excludes")}</span><textarea rows="4" bind:value={form.excl}></textarea></label>
@@ -317,9 +318,9 @@
   </form>
 
   <form class="panel settings" onsubmit={(e) => { e.preventDefault(); saveForm(); }}>
-    <h3>{t("sb.copyTitle")}</h3>
+    <h3>{t("sb.copyTitle")}<Hint text={t("hn.321")} /></h3>
     <p class="muted small">{t("sb.copyText")}</p>
-    <label class="field"><span>{t("sb.copyRepo")}</span><input bind:value={form.copyRepo} placeholder="D:\\Backups\\{server.name}  ·  s3:s3.amazonaws.com/bucket/mc" /></label>
+    <label class="field"><span>{t("sb.copyRepo")}</span><input bind:value={form.copyRepo} placeholder="D:\Backups\{server.name}  ·  s3:s3.amazonaws.com/bucket/mc" /></label>
     <label class="field"><span>{t("sb.copyEnv")}</span><textarea rows="2" bind:value={form.copyEnv} placeholder="AWS_ACCESS_KEY_ID=…&#10;AWS_SECRET_ACCESS_KEY=…" spellcheck="false"></textarea></label>
     <label class="check"><input type="checkbox" bind:checked={form.copyAfter} />{t("sb.copyAfter")}</label>
     <label class="check"><input type="checkbox" bind:checked={form.verify} />{t("sb.verifyWeekly")}</label>
@@ -376,7 +377,7 @@
           <p class="muted small">{lsLoading ? "…" : t("sb.empty")}</p>
         {/each}
       </div>
-      <p class="muted small" style="margin:0">{t("sb.restorePlaceHint")}</p>
+      <p class="muted small" style="margin:0">{t("sb.legend")}</p>
     </div>
   </div>
 {/if}

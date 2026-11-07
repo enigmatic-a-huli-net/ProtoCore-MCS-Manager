@@ -1,6 +1,7 @@
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
   import Icon from "../Icon.svelte";
+  import Hint from "../Hint.svelte";
   import { api, type ConnectInfo, type NetStats, type ServerEntry } from "../../lib/api";
   import { app, status, t, toast, fail } from "../../lib/store.svelte";
   import type { Key } from "../../lib/i18n";
@@ -133,7 +134,7 @@
   <!-- ================= подключение ================= -->
   <section class="panel">
     <div class="row">
-      <h3 class="grow">{t("net.howTo")}</h3>
+      <h3 class="grow">{t("net.howTo")}<Hint text={t("hn.upnp")} /></h3>
       <button class="btn sm" disabled={loading} onclick={() => load(running)} title={running ? "" : t("net.needRun")}>
         <Icon name="search" size={14} />{loading ? t("net.checking") : t("net.check")}
       </button>

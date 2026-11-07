@@ -78,6 +78,7 @@ fn main() {
     pcm_core::update::cleanup();
     let paths = AppPaths::from_exe();
     let _ = paths.ensure();
+    pcm_core::java::set_managed_root(paths.base.join("java"));
     let config = Config::load(&paths);
     let sink = Arc::new(TauriSink::default());
     let pm = Arc::new(ProcessManager::new(sink.clone(), config.console_lines));
@@ -206,6 +207,15 @@ fn main() {
             commands::copy_now,
             commands::verify_repo,
             commands::get_changes,
+            commands::java_list,
+            commands::java_download,
+            commands::java_required,
+            commands::preflight,
+            commands::logs_info,
+            commands::logs_search,
+            commands::logs_clean,
+            commands::sandbox_update,
+            commands::set_simple_mode,
             commands::player_action,
             commands::notify_test,
             commands::modpack_import,

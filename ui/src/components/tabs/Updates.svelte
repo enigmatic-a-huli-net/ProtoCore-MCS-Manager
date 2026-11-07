@@ -1,7 +1,8 @@
 <script lang="ts">
   import Icon from "../Icon.svelte";
-  import { api, type Kind, type ServerEntry, type UpdatesReport } from "../../lib/api";
-  import { app, t, fail } from "../../lib/store.svelte";
+  import Hint from "../Hint.svelte";
+  import { api, type Kind, type Plan, type SandboxResult, type ServerEntry, type UpdatesReport } from "../../lib/api";
+  import { app, t, toast, fail } from "../../lib/store.svelte";
 
   let { server, kind, onUpdated }: { server: ServerEntry; kind: Kind; onUpdated?: () => void } = $props();
 
@@ -25,26 +26,49 @@
 
   const chosen = $derived(report?.updates.filter((u) => sel[u.file]) ?? []);
 
+  const makePlan = (): Plan => ({
+    items: chosen.map((u) => ({
+      title: u.title,
+      icon_url: u.icon_url,
+      file: u.latest,
+      reason: "update" as const,
+      replaces: u.file !== u.latest.file_name ? u.file : null,
+    })),
+    already: [],
+    warnings: [],
+  });
+
   function apply() {
     app.plan = {
       id: server.id,
       kind,
-      plan: {
-        items: chosen.map((u) => ({
-          title: u.title,
-          icon_url: u.icon_url,
-          file: u.latest,
-          reason: "update" as const,
-          replaces: u.file !== u.latest.file_name ? u.file : null,
-        })),
-        already: [],
-        warnings: [],
-      },
+      plan: makePlan(),
       onDone: () => {
         check();
         onUpdated?.();
       },
     };
+  }
+
+  // проверка в тестовой копии: ставим, только если копия запустилась
+  let testing = $state(false);
+  let sandbox = $state<SandboxResult | null>(null);
+  async function testApply() {
+    testing = true;
+    sandbox = null;
+    try {
+      sandbox = await api.sandboxUpdate(server.id, makePlan());
+      if (sandbox.ok) {
+        toast(t("upd.sbOk", { n: sandbox.installed.length }), "ok");
+        check();
+        onUpdated?.();
+      }
+    } catch (e) {
+      fail(e);
+    } finally {
+      testing = false;
+      app.catalogProgress = null;
+    }
   }
 </script>
 
@@ -55,10 +79,21 @@
     <span class="grow"></span>
     {#if report?.updates.length}
       <button class="btn ghost sm" onclick={() => (sel = Object.fromEntries(report!.updates.map((u) => [u.file, true])))}>{t("upd.selectAll")}</button>
-      <button class="btn primary sm" disabled={!chosen.length} onclick={apply}><Icon name="download" size={14} />{t("upd.apply", { n: chosen.length })}</button>
+      {#if kind === "mod"}
+        <button class="btn sm" disabled={!chosen.length || testing} onclick={testApply}>
+          <Icon name="shield" size={14} />{testing ? t("upd.sbRunning") : t("upd.sbTest", { n: chosen.length })}
+        </button>
+        <Hint text={t("upd.sbHint")} />
+      {/if}
+      <button class="btn primary sm" disabled={!chosen.length || testing} onclick={apply}><Icon name="download" size={14} />{t("upd.apply", { n: chosen.length })}</button>
     {/if}
   </div>
   <p class="muted small hint">{t("upd.note")}</p>
+  {#if testing}
+    <p class="small hint">{app.catalogProgress?.title ? `${t("upd.sbDownloading")} ${app.catalogProgress.title}` : t("upd.sbRunningLong")}</p>
+  {:else if sandbox}
+    <p class="small hint" class:warnline={!sandbox.ok} class:okline={sandbox.ok}>{sandbox.ok ? "✔" : "✖"} {sandbox.message}</p>
+  {/if}
   {#if report?.updates.some((u) => u.prerelease)}<p class="small hint warnline">{t("upd.prerelease")}</p>{/if}
 
   <div class="list scroll">
@@ -92,6 +127,7 @@
   .bar { display: flex; align-items: center; gap: 10px; }
   .hint { margin: 0; }
   .warnline { color: var(--warn); }
+  .okline { color: var(--ok); }
   .small { font-size: 0.85em; }
   .list { flex: 1; display: grid; align-content: start; gap: 4px; padding-bottom: 16px; }
   .item { display: flex; align-items: center; gap: 12px; padding: 7px 12px; border-radius: var(--radius); cursor: pointer; }
