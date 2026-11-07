@@ -45,6 +45,14 @@
     <td align="center">Советы по оптимизации с кнопками</td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/players.png" alt="Игроки: история, твинки, чат"></td>
+    <td><img src="docs/screenshots/snapshot-files.png" alt="Файлы снапшота и точечное восстановление"></td>
+  </tr>
+  <tr>
+    <td align="center">Игроки: история, твинки, чат</td>
+    <td align="center">Снапшот: вернуть один файл или папку</td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/plugins-light.png" alt="Плагины в светлой теме"></td>
     <td></td>
   </tr>
