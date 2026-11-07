@@ -200,14 +200,14 @@ pub fn parse_cmd(text: &str) -> Option<BotCmd> {
 }
 
 pub const BOT_HELP: &str = "ProtoCore-MCS-Manager\n\
-/status — состояние серверов\n\
-/players [сервер] — кто онлайн\n\
+/status — список серверов с номерами\n\
+/players <сервер> — кто онлайн\n\
 /run <сервер> — запустить\n\
 /stop <сервер> — остановить\n\
 /restart <сервер> — перезапустить\n\
 /backup <сервер> — снапшот\n\
-/say <текст> — сообщение в чат выбранного сервера\n\
-Сервер — часть названия; если сервер один или выбран в менеджере, можно не указывать.";
+/say <сервер> <текст> — сообщение в чат сервера\n\
+Сервер — номер из /status или название: /restart 1, /stop lobby.";
 
 /// Получить новые сообщения (long polling). Возвращает (новый offset, [(chat_id, текст)]).
 pub fn telegram_updates(token: &str, offset: i64, timeout_s: u32) -> Result<(i64, Vec<(String, String)>)> {

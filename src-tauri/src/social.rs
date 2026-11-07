@@ -137,18 +137,25 @@ pub fn on_exit(app: &AppHandle, id: &str, info: &ExitInfo) {
 
 fn find_server(app: &AppHandle, q: Option<&str>) -> Result<pcm_core::config::ServerEntry, String> {
     let c = app.state::<AppState>().config.lock().unwrap().clone();
-    match q {
-        Some(q) => {
-            let ql = q.to_lowercase();
-            let hits: Vec<_> = c.servers.iter().filter(|s| s.name.to_lowercase().contains(&ql)).collect();
-            match hits.len() {
-                1 => Ok(hits[0].clone()),
-                0 => Err(format!("Сервер «{q}» не найден")),
-                _ => Err(format!("Под «{q}» подходят: {}", hits.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "))),
-            }
-        }
-        None if c.servers.len() == 1 => Ok(c.servers[0].clone()),
-        None => c.server(&c.selected).cloned().ok_or_else(|| "Укажи сервер: /restart <название>".into()),
+    // сервер указывается всегда — номером из /status или названием
+    let list = || {
+        c.servers.iter().enumerate().map(|(i, s)| format!("{}. {}", i + 1, s.name)).collect::<Vec<_>>().join("\n")
+    };
+    let Some(q) = q.map(str::trim).filter(|q| !q.is_empty()) else {
+        return Err(format!("Укажи сервер номером или названием, например /restart 1\n{}", list()));
+    };
+    if let Ok(n) = q.parse::<usize>() {
+        return c.servers.get(n.wrapping_sub(1)).cloned().ok_or_else(|| format!("Нет сервера №{n}\n{}", list()));
+    }
+    let ql = q.to_lowercase();
+    if let Some(s) = c.servers.iter().find(|s| s.name.to_lowercase() == ql) {
+        return Ok(s.clone());
+    }
+    let hits: Vec<_> = c.servers.iter().filter(|s| s.name.to_lowercase().contains(&ql)).collect();
+    match hits.len() {
+        1 => Ok(hits[0].clone()),
+        0 => Err(format!("Сервер «{q}» не найден\n{}", list())),
+        _ => Err(format!("Под «{q}» подходят несколько — укажи номер:\n{}", list())),
     }
 }
 
@@ -178,7 +185,7 @@ fn status_text(app: &AppHandle) -> String {
         } else {
             String::new()
         };
-        out.push_str(&format!("{icon} {}{extra}\n", s.name));
+        out.push_str(&format!("{}. {icon} {}{extra}\n", out.lines().count() + 1, s.name));
     }
     if out.is_empty() {
         "Серверов нет".into()
@@ -204,7 +211,12 @@ fn handle(app: &AppHandle, cmd: BotCmd) -> String {
             }
             Err(e) => e,
         },
-        BotCmd::Say(q, text) => match find_server(app, q.as_deref()) {
+        BotCmd::Say(_, text) => {
+            // «/say 1 привет» или «/say lobby привет»
+            let mut it = text.trim().splitn(2, char::is_whitespace);
+            let q = it.next().map(String::from);
+            let text = it.next().unwrap_or("").to_string();
+            match find_server(app, q.as_deref()) {
             Ok(s) if !text.trim().is_empty() => {
                 let clean: String = text.chars().filter(|c| !c.is_control()).take(200).collect();
                 match state.pm.send(&s.id, &format!("say [Telegram] {clean}")) {
@@ -215,9 +227,10 @@ fn handle(app: &AppHandle, cmd: BotCmd) -> String {
                     Err(e) => e.to_string(),
                 }
             }
-            Ok(_) => "Напиши текст: /say привет".into(),
+            Ok(_) => "Напиши текст: /say 1 привет".into(),
             Err(e) => e,
-        },
+            }
+        }
         BotCmd::Start(ref q) | BotCmd::Stop(ref q) | BotCmd::Restart(ref q) | BotCmd::Backup(ref q) => {
             let s = match find_server(app, q.as_deref()) {
                 Ok(s) => s,
