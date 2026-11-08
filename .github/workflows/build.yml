@@ -41,7 +41,16 @@ jobs:
       - name: Тест шифрования секретов (DPAPI)
         run: cargo test -p pcm-core secret
       - name: Сборка
-        run: npx tauri build
+        # загрузка NSIS с GitHub иногда отвечает 504 — пробуем до трёх раз
+        shell: pwsh
+        run: |
+          for ($i = 1; $i -le 3; $i++) {
+            npx tauri build
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "Сборка не удалась (попытка $i), повтор через 20 с…"
+            Start-Sleep -Seconds 20
+          }
+          exit 1
       - name: Портативная версия (zip)
         shell: pwsh
         run: |
