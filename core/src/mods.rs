@@ -1072,7 +1072,15 @@ pub fn version_matches(req: &str, have: &str) -> Option<bool> {
 // ===================================================================== операции
 
 /// Включить или выключить мод (перенос между mods/ и mods_disabled/).
+/// Имя файла из интерфейса — только имя, без папок и «..».
+pub fn plain_file_name(file: &str) -> bool {
+    !file.is_empty() && file != "." && file != ".." && !file.contains(['/', '\\', ':']) && !file.contains("..")
+}
+
 pub fn set_enabled(server_dir: &Path, file: &str, enable: bool, reason: &str, detail: &str) -> Result<PathBuf> {
+    if !plain_file_name(file) {
+        return Err(crate::Error::other(format!("недопустимое имя файла: {file}")));
+    }
     let enabled_dir = server_dir.join(ENABLED_DIR);
     let disabled_dir = server_dir.join(DISABLED_DIR);
     let (from, to) = if enable { (&disabled_dir, &enabled_dir) } else { (&enabled_dir, &disabled_dir) };
@@ -1341,5 +1349,39 @@ type="incompatible"
         jar(&mods, "user.jar", &[("fabric.mod.json", br#"{"id":"user","depends":{"cloth-config":"*"}}"#)]);
         let r = list(t.path(), Some(ModLoader::Fabric), &ModSettings::default());
         assert!(r.missing.is_empty(), "{:?}", r.missing);
+    }
+
+    #[test]
+    fn toggle_moves_and_never_overwrites() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path();
+        fs::create_dir_all(d.join(ENABLED_DIR)).unwrap();
+        fs::create_dir_all(d.join(DISABLED_DIR)).unwrap();
+        fs::write(d.join(ENABLED_DIR).join("a.jar"), "new").unwrap();
+        // в mods_disabled уже лежит файл с тем же именем — его нельзя затереть
+        fs::write(d.join(DISABLED_DIR).join("a.jar"), "old").unwrap();
+        let moved = set_enabled(d, "a.jar", false, "test", "").unwrap();
+        assert_eq!(fs::read_to_string(d.join(DISABLED_DIR).join("a.jar")).unwrap(), "old");
+        assert_eq!(fs::read_to_string(&moved).unwrap(), "new");
+        assert!(!d.join(ENABLED_DIR).join("a.jar").exists());
+        // обратно
+        let name = moved.file_name().unwrap().to_string_lossy().to_string();
+        set_enabled(d, &name, true, "", "").unwrap();
+        assert_eq!(fs::read_to_string(d.join(ENABLED_DIR).join(&name)).unwrap(), "new");
+        // нет файла — ошибка, ничего не трогаем
+        assert!(set_enabled(d, "missing.jar", false, "", "").is_err());
+    }
+
+    #[test]
+    fn toggle_rejects_paths() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("srv");
+        fs::create_dir_all(d.join(ENABLED_DIR)).unwrap();
+        fs::write(t.path().join("secret.txt"), "x").unwrap();
+        for bad in ["../secret.txt", "..\\secret.txt", "/etc/passwd", "C:\\x.jar", "..", ""] {
+            assert!(set_enabled(&d, bad, false, "", "").is_err(), "{bad}");
+        }
+        assert!(t.path().join("secret.txt").exists());
+        assert!(plain_file_name("create-1.21.1-6.0.10.jar"));
     }
 }

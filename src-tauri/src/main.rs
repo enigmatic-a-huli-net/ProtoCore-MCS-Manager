@@ -217,6 +217,7 @@ fn main() {
             commands::sandbox_update,
             commands::set_simple_mode,
             commands::telegram_find_chat,
+            commands::set_hash_ips,
             commands::player_action,
             commands::notify_test,
             commands::modpack_import,

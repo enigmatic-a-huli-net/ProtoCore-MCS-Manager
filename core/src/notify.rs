@@ -27,6 +27,15 @@ pub struct NotifySettings {
     pub disk_low_gb: u32,
     pub on_join: bool,
     pub on_net_bad: bool,
+    /// Telegram id людей, которым можно управлять серверами (/run, /stop …)
+    pub telegram_admins: Vec<String>,
+    /// Тихие часы «ЧЧ:ММ» (пусто — выключены). Можно через полночь: 23:00 → 08:00
+    pub quiet_from: String,
+    pub quiet_to: String,
+    /// Падения присылать и в тихие часы
+    pub quiet_allow_crash: bool,
+    /// Не чаще одного уведомления одного типа за столько минут
+    pub min_interval_min: u32,
 }
 
 impl Default for NotifySettings {
@@ -46,6 +55,11 @@ impl Default for NotifySettings {
             disk_low_gb: 5,
             on_join: false,
             on_net_bad: false,
+            telegram_admins: vec![],
+            quiet_from: String::new(),
+            quiet_to: String::new(),
+            quiet_allow_crash: true,
+            min_interval_min: 0,
         }
     }
 }
@@ -59,6 +73,27 @@ impl NotifySettings {
     }
     pub fn any(&self) -> bool {
         self.telegram_ready() || self.discord_ready()
+    }
+
+    pub fn is_admin(&self, user: &str) -> bool {
+        self.telegram_admins.iter().any(|a| a.trim() == user)
+    }
+
+    /// Сейчас (минуты от полуночи) — тихие часы?
+    pub fn quiet_at(&self, minute_of_day: u32) -> bool {
+        let parse = |s: &str| -> Option<u32> {
+            let (h, m) = s.trim().split_once(':')?;
+            let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+            (h < 24 && m < 60).then_some(h * 60 + m)
+        };
+        let (Some(a), Some(b)) = (parse(&self.quiet_from), parse(&self.quiet_to)) else { return false };
+        if a == b {
+            false
+        } else if a < b {
+            (a..b).contains(&minute_of_day)
+        } else {
+            minute_of_day >= a || minute_of_day < b
+        }
     }
 }
 
@@ -161,6 +196,7 @@ pub fn send(s: &NotifySettings, text: &str) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BotCmd {
     Help,
+    Id,
     Status,
     Players(Option<String>),
     Start(Option<String>),
@@ -184,6 +220,7 @@ pub fn parse_cmd(text: &str) -> Option<BotCmd> {
     Some(match cmd.as_str() {
         "start" if rest.is_none() => BotCmd::Help, // «/start» — первое сообщение боту
         "help" => BotCmd::Help,
+        "id" | "whoami" => BotCmd::Id,
         "status" | "s" => BotCmd::Status,
         "players" | "online" => BotCmd::Players(rest),
         "run" | "start" | "up" => BotCmd::Start(rest),
@@ -207,26 +244,81 @@ pub const BOT_HELP: &str = "ProtoCore-MCS-Manager\n\
 /restart <сервер> — перезапустить\n\
 /backup <сервер> — снапшот\n\
 /say <сервер> <текст> — сообщение в чат сервера\n\
-Сервер — номер из /status или название: /restart 1, /stop lobby.";
+/id — твой Telegram id (чтобы владелец добавил тебя в администраторы)\n\
+Сервер — номер из /status или название: /restart 1, /stop lobby.\n\
+Управлять (/run, /stop, /restart, /backup, /say) могут только администраторы; запуск, остановку и перезапуск нужно подтвердить кнопкой.";
 
-/// Получить новые сообщения (long polling). Возвращает (новый offset, [(chat_id, текст)]).
-pub fn telegram_updates(token: &str, offset: i64, timeout_s: u32) -> Result<(i64, Vec<(String, String)>)> {
-    let v = tg_call(token, "getUpdates", &json!({ "offset": offset, "timeout": timeout_s, "allowed_updates": ["message"] }))?;
+impl BotCmd {
+    /// Команды, меняющие состояние сервера.
+    pub fn dangerous(&self) -> bool {
+        matches!(self, BotCmd::Start(_) | BotCmd::Stop(_) | BotCmd::Restart(_) | BotCmd::Backup(_) | BotCmd::Say(..))
+    }
+    /// Нужна ли кнопка подтверждения.
+    pub fn needs_confirm(&self) -> bool {
+        matches!(self, BotCmd::Start(_) | BotCmd::Stop(_) | BotCmd::Restart(_))
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Update {
+    pub chat: String,
+    /// id отправителя
+    pub from: String,
+    pub from_name: String,
+    pub text: String,
+    /// нажатие инлайн-кнопки: (id запроса, data, id сообщения)
+    pub callback: Option<(String, String, i64)>,
+}
+
+fn num(v: &Value) -> Option<String> {
+    match v {
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// Получить новые сообщения и нажатия кнопок (long polling). Возвращает (новый offset, события).
+pub fn telegram_updates(token: &str, offset: i64, timeout_s: u32) -> Result<(i64, Vec<Update>)> {
+    let v = tg_call(token, "getUpdates", &json!({ "offset": offset, "timeout": timeout_s, "allowed_updates": ["message", "callback_query"] }))?;
     let mut next = offset;
     let mut out = Vec::new();
     for u in v["result"].as_array().into_iter().flatten() {
         if let Some(id) = u["update_id"].as_i64() {
             next = next.max(id + 1);
         }
-        let chat = match &u["message"]["chat"]["id"] {
-            Value::Number(n) => n.to_string(),
-            _ => continue,
-        };
-        if let Some(t) = u["message"]["text"].as_str() {
-            out.push((chat, t.to_string()));
+        let name = |f: &Value| f["username"].as_str().map(|x| format!("@{x}")).or(f["first_name"].as_str().map(String::from)).unwrap_or_default();
+        if let Some(cb) = u.get("callback_query") {
+            let (Some(chat), Some(from)) = (num(&cb["message"]["chat"]["id"]), num(&cb["from"]["id"])) else { continue };
+            out.push(Update {
+                chat,
+                from,
+                from_name: name(&cb["from"]),
+                text: String::new(),
+                callback: Some((cb["id"].as_str().unwrap_or("").to_string(), cb["data"].as_str().unwrap_or("").to_string(), cb["message"]["message_id"].as_i64().unwrap_or(0))),
+            });
+            continue;
         }
+        let m = &u["message"];
+        let (Some(chat), Some(text)) = (num(&m["chat"]["id"]), m["text"].as_str()) else { continue };
+        out.push(Update { chat, from: num(&m["from"]["id"]).unwrap_or_default(), from_name: name(&m["from"]), text: text.to_string(), callback: None });
     }
     Ok((next, out))
+}
+
+/// Сообщение с инлайн-кнопками [(подпись, data)]. Возвращает id сообщения.
+pub fn telegram_send_buttons(token: &str, chat: &str, text: &str, buttons: &[(&str, String)]) -> Result<i64> {
+    let row: Vec<Value> = buttons.iter().map(|(t, d)| json!({ "text": t, "callback_data": d })).collect();
+    let v = tg_call(token, "sendMessage", &json!({ "chat_id": normalize_chat(chat), "text": text, "reply_markup": { "inline_keyboard": [row] } }))?;
+    Ok(v["result"]["message_id"].as_i64().unwrap_or(0))
+}
+
+pub fn telegram_answer(token: &str, callback_id: &str, text: &str) {
+    let _ = tg_call(token, "answerCallbackQuery", &json!({ "callback_query_id": callback_id, "text": text }));
+}
+
+/// Заменить текст сообщения (и убрать кнопки).
+pub fn telegram_edit(token: &str, chat: &str, message_id: i64, text: &str) {
+    let _ = tg_call(token, "editMessageText", &json!({ "chat_id": normalize_chat(chat), "message_id": message_id, "text": text }));
 }
 
 /// Проверка токена: имя бота.
@@ -251,6 +343,10 @@ mod tests {
         assert_eq!(normalize_chat(" 123 456 "), "123456");
         assert_eq!(normalize_chat("@-100123"), "-100123");
         assert_eq!(normalize_chat("@mychannel"), "@mychannel");
+        assert_eq!(parse_cmd("/id"), Some(BotCmd::Id));
+        assert!(BotCmd::Stop(None).dangerous() && BotCmd::Stop(None).needs_confirm());
+        assert!(BotCmd::Backup(None).dangerous() && !BotCmd::Backup(None).needs_confirm());
+        assert!(!BotCmd::Status.dangerous());
     }
 
     #[test]
@@ -259,5 +355,14 @@ mod tests {
         assert!(!s.any());
         s.discord_webhook = "https://discord.com/api/webhooks/1/x".into();
         assert!(s.discord_ready() && s.any());
+        assert!(!s.quiet_at(0));
+        s.quiet_from = "23:00".into();
+        s.quiet_to = "08:00".into();
+        assert!(s.quiet_at(23 * 60 + 30) && s.quiet_at(3 * 60) && !s.quiet_at(12 * 60) && !s.quiet_at(8 * 60));
+        s.quiet_from = "13:00".into();
+        s.quiet_to = "14:00".into();
+        assert!(s.quiet_at(13 * 60 + 5) && !s.quiet_at(14 * 60));
+        s.telegram_admins = vec![" 42 ".into()];
+        assert!(s.is_admin("42") && !s.is_admin("4"));
     }
 }

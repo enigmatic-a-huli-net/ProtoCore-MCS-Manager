@@ -178,4 +178,39 @@ mod tests {
         let h = search(t.path(), "griefer", 10);
         assert_eq!((h.len(), h[0].line), (1, 5001));
     }
+
+    #[test]
+    fn clean_never_touches_anything_else() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path();
+        let past = SystemTime::now() - Duration::from_secs(90 * 86_400);
+        let old = |p: &Path| fs::File::options().write(true).open(p).unwrap().set_modified(past).unwrap();
+        fs::create_dir_all(d.join("logs/sub")).unwrap();
+        fs::create_dir_all(d.join("crash-reports")).unwrap();
+        fs::create_dir_all(d.join("world")).unwrap();
+        // то, что трогать нельзя
+        for f in ["logs/latest.log", "logs/debug.log", "world/level.dat", "server.log", "logs/sub/deep.log.gz", "logs/notes.json"] {
+            fs::write(d.join(f), "keep").unwrap();
+            old(&d.join(f));
+        }
+        fs::write(d.join("logs/fresh.log"), "keep").unwrap(); // свежий — может ещё писаться
+        // то, что можно сжать / удалить
+        fs::write(d.join("logs/2026-01-01-1.log"), "old plain").unwrap();
+        old(&d.join("logs/2026-01-01-1.log"));
+        fs::write(d.join("logs/2025-12-01-1.log.gz"), "old gz").unwrap();
+        old(&d.join("logs/2025-12-01-1.log.gz"));
+        fs::write(d.join("crash-reports/crash-old.txt"), "crash").unwrap();
+        old(&d.join("crash-reports/crash-old.txt"));
+
+        // 0 дней — сжимаем, но ничего не удаляем
+        let r = clean(d, 0).unwrap();
+        assert_eq!((r.compressed, r.deleted), (2, 0));
+        assert!(d.join("logs/2025-12-01-1.log.gz").exists());
+
+        let r = clean(d, 30).unwrap();
+        assert_eq!(r.deleted, 1, "удаляется только старый .gz; только что сжатые получили свежую дату");
+        for f in ["logs/latest.log", "logs/debug.log", "world/level.dat", "server.log", "logs/sub/deep.log.gz", "logs/notes.json", "logs/fresh.log"] {
+            assert_eq!(fs::read_to_string(d.join(f)).unwrap(), "keep", "{f} не должен меняться");
+        }
+    }
 }

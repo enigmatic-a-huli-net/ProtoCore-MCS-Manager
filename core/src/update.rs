@@ -19,6 +19,29 @@ use crate::{Error, Result};
 
 pub const DEFAULT_REPO: &str = "enigmatic-a-huli-net/ProtoCore-MCS-Manager";
 const ASSET_NAME: &str = "ProtoCore-MCS-Manager-portable.zip";
+const SIG_NAME: &str = "ProtoCore-MCS-Manager-portable.zip.sig";
+
+/// Публичный ключ подписи релизов (Ed25519). Закрытый ключ есть только в секретах GitHub Actions.
+/// Обновление без верной подписи не устанавливается.
+pub const UPDATE_PUBKEY: &str = "5cca0b6b2c3bbfe30028f37854642fc2f663b2701992969d3156539bb3d0a9c0";
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
+/// Проверка подписи файла обновления.
+pub fn verify(data: &[u8], sig_hex: &str, pubkey_hex: &str) -> Result<()> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    let bad = || Error::Network("подпись обновления не совпала — файл подменён или повреждён, установка отменена".into());
+    let pk: [u8; 32] = unhex(pubkey_hex).and_then(|v| v.try_into().ok()).ok_or_else(bad)?;
+    let sig: [u8; 64] = unhex(sig_hex).and_then(|v| v.try_into().ok()).ok_or_else(bad)?;
+    let key = VerifyingKey::from_bytes(&pk).map_err(|_| bad())?;
+    key.verify(data, &Signature::from_bytes(&sig)).map_err(|_| bad())
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateInfo {
@@ -30,6 +53,7 @@ pub struct UpdateInfo {
     pub html_url: String,
     pub asset_url: String,
     pub asset_size: u64,
+    pub sig_url: String,
 }
 
 fn get(url: &str) -> Result<ureq::Response> {
@@ -68,6 +92,13 @@ pub fn check(repo: &str, current: &str) -> Result<UpdateInfo> {
             .unwrap_or("")
             .to_string(),
         asset_size: asset.and_then(|a| a.get("size").and_then(Value::as_u64)).unwrap_or(0),
+        sig_url: rel
+            .get("assets")
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().find(|x| x.get("name").and_then(Value::as_str) == Some(SIG_NAME)))
+            .and_then(|a| a.get("browser_download_url").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -95,6 +126,14 @@ pub fn download(info: &UpdateInfo, mut on_progress: impl FnMut(u64, u64)) -> Res
         bytes.extend_from_slice(&buf[..n]);
         on_progress(bytes.len() as u64, info.asset_size);
     }
+    // подпись: без неё или с неверной — не ставим
+    if info.sig_url.is_empty() {
+        return Err(Error::Network("у релиза нет подписи — установка отменена. Скачай версию вручную со страницы релиза".into()));
+    }
+    let mut sig = String::new();
+    get(&info.sig_url)?.into_reader().take(4096).read_to_string(&mut sig)?;
+    verify(&bytes, &sig, UPDATE_PUBKEY)?;
+
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
     let idx = (0..zip.len())
         .find(|&i| {
@@ -177,5 +216,24 @@ pub fn cleanup() {
     // старый скрипт обновления из версий до 0.3.2
     if let Some(dir) = exe.parent() {
         let _ = fs::remove_file(dir.join("data").join("pcm-update.cmd"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    #[test]
+    fn signature_check() {
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let pk: String = key.verifying_key().as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        let data = b"update zip bytes";
+        let sig: String = key.sign(data).to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        assert!(verify(data, &sig, &pk).is_ok());
+        assert!(verify(b"tampered", &sig, &pk).is_err());
+        assert!(verify(data, "00", &pk).is_err());
+        assert!(verify(data, &sig, UPDATE_PUBKEY).is_err());
+        assert_eq!(UPDATE_PUBKEY.len(), 64);
     }
 }

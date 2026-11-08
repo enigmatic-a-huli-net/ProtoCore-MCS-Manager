@@ -16,6 +16,10 @@
   let netmon = $state(c.network_monitor ?? true);
   let nt = $state<NotifySettings>({ ...DEFAULT_NOTIFY, ...(c.notify ?? {}) });
   let testing = $state(false);
+  let admins = $state((nt.telegram_admins ?? []).join(", "));
+  $effect(() => {
+    nt.telegram_admins = admins.split(/[,\s]+/).map((x) => x.trim()).filter((x) => /^-?\d+$/.test(x));
+  });
   let finding = $state(false);
   async function findChat() {
     finding = true;
@@ -179,6 +183,10 @@
     </div>
     <p class="muted small" style="margin:0">{t("nt.tgTokenHint")} {t("nt.tgChatHint")}</p>
     <label class="check"><input type="checkbox" bind:checked={nt.telegram_bot} disabled={!nt.telegram_token || !nt.telegram_chat} />{t("nt.bot")}</label>
+    {#if nt.telegram_bot}
+      <label class="field"><span>{t("nt.admins")}</span><input bind:value={admins} placeholder="123456789, 987654321" /></label>
+      <p class="muted small" style="margin:0">{t("nt.adminsHint")}</p>
+    {/if}
     <label class="field"><span>{t("nt.discord")}</span><input type="password" bind:value={nt.discord_webhook} autocomplete="off" placeholder="https://discord.com/api/webhooks/…" /></label>
     <p class="muted small" style="margin:0">{t("nt.discordHint")}</p>
     <span class="muted small">{t("nt.events")}</span>
@@ -192,6 +200,13 @@
       <label class="check num"><input type="checkbox" bind:checked={nt.on_low_tps} />{t("nt.lowTps")} <input type="number" min="5" max="19" step="1" bind:value={nt.low_tps} /></label>
       <label class="check num"><input type="checkbox" bind:checked={nt.on_disk_low} />{t("nt.disk")} <input type="number" min="1" max="500" bind:value={nt.disk_low_gb} /></label>
     </div>
+    <div class="row wrap quiet">
+      <span class="muted small">{t("nt.quiet")}</span>
+      <input type="time" bind:value={nt.quiet_from} /> — <input type="time" bind:value={nt.quiet_to} />
+      <label class="check"><input type="checkbox" bind:checked={nt.quiet_allow_crash} />{t("nt.quietCrash")}</label>
+    </div>
+    <label class="check num"><span class="muted small">{t("nt.minInterval")}</span> <input type="number" min="0" max="1440" bind:value={nt.min_interval_min} /> <span class="muted small">{t("nt.min")}</span></label>
+    <p class="muted small" style="margin:0">{t("nt.quietHint")}</p>
     <div><button type="button" class="btn sm" disabled={testing || (!nt.telegram_token && !nt.discord_webhook)} onclick={testNotify}><Icon name="chevron" size={13} />{t("nt.test")}</button></div>
   </section>
 
@@ -214,6 +229,8 @@
 </div>
 
 <style>
+  .quiet { gap: 8px; align-items: center; }
+  .quiet input[type="time"] { width: 7.5em; }
   .page { flex: 1; padding: 22px 26px; display: grid; align-content: start; gap: 16px; max-width: 820px; }
   h1 { font-size: 1.35em; }
   section { padding: 18px 20px; display: grid; gap: 14px; }

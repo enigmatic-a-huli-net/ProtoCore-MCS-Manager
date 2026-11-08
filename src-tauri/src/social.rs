@@ -18,6 +18,20 @@ pub struct Social {
     last_status: Mutex<HashMap<String, Status>>,
     /// когда последний раз слали уведомление по ключу (защита от спама)
     sent: Mutex<HashMap<String, Instant>>,
+    /// сколько похожих уведомлений подавлено с последней отправки
+    suppressed: Mutex<HashMap<String, u32>>,
+    /// отложено на конец тихих часов
+    held: Mutex<Vec<String>>,
+    /// бот: ожидающие подтверждения команды (nonce → команда, кто, когда)
+    pending: Mutex<HashMap<String, (BotCmd, String, Instant)>>,
+    /// бот: время последних команд каждого пользователя
+    rate: Mutex<HashMap<String, Vec<Instant>>>,
+}
+
+fn minute_now() -> u32 {
+    use chrono::Timelike;
+    let n = chrono::Local::now();
+    n.hour() * 60 + n.minute()
 }
 
 fn is_test(id: &str) -> bool {
@@ -34,13 +48,52 @@ pub fn notify(app: &AppHandle, key: &str, every: Duration, text: String) {
     if !s.any() {
         return;
     }
+    let every = every.max(Duration::from_secs(s.min_interval_min as u64 * 60));
+    let social = app.state::<Social>();
+    // тихие часы: копим и пришлём сводкой утром (падения — по настройке сразу)
+    let urgent = key.starts_with("crash:") && s.quiet_allow_crash;
+    if !urgent && s.quiet_at(minute_now()) {
+        let mut held = social.held.lock().unwrap();
+        if held.len() < 50 {
+            held.push(text);
+        }
+        return;
+    }
+    let mut text = text;
     {
-        let social = app.state::<Social>();
         let mut sent = social.sent.lock().unwrap();
+        let mut sup = social.suppressed.lock().unwrap();
         if sent.get(key).is_some_and(|t| t.elapsed() < every) {
+            // не спамим: считаем, сколько похожих пропустили
+            *sup.entry(key.to_string()).or_default() += 1;
             return;
         }
         sent.insert(key.to_string(), Instant::now());
+        if let Some(n) = sup.remove(key).filter(|n| *n > 0) {
+            text.push_str(&format!("\n(и ещё {n} таких же с прошлого уведомления)"));
+        }
+    }
+    std::thread::spawn(move || {
+        let _ = notify::send(&s, &text);
+    });
+}
+
+/// После тихих часов — одна сводка вместо пачки сообщений (вызывается планировщиком).
+pub fn release_held(app: &AppHandle) {
+    let s = app.state::<AppState>().config.lock().unwrap().notify.clone();
+    if s.quiet_at(minute_now()) {
+        return;
+    }
+    let held: Vec<String> = std::mem::take(&mut *app.state::<Social>().held.lock().unwrap());
+    if held.is_empty() || !s.any() {
+        return;
+    }
+    let mut text = format!("🌙 За тихие часы ({}):\n", held.len());
+    for h in held.iter().take(15) {
+        text.push_str(&format!("• {}\n", h.lines().next().unwrap_or("")));
+    }
+    if held.len() > 15 {
+        text.push_str(&format!("…и ещё {}", held.len() - 15));
     }
     std::thread::spawn(move || {
         let _ = notify::send(&s, &text);
@@ -52,6 +105,18 @@ pub fn with_db<T>(app: &AppHandle, id: &str, f: impl FnOnce(&mut PlayerDb) -> T)
     let social = app.state::<Social>();
     let mut dbs = social.dbs.lock().unwrap();
     let db = dbs.entry(id.to_string()).or_insert_with(|| PlayerDb::load(&PlayerDb::file(&state.paths.data, id)));
+    let salt = {
+        let mut c = state.config.lock().unwrap();
+        if c.hash_player_ips && c.ip_salt.is_empty() {
+            c.ip_salt = pcm_core::util::random_password();
+        }
+        c.hash_player_ips.then(|| c.ip_salt.clone())
+    };
+    let was = db.ip_salt.is_some();
+    db.ip_salt = salt;
+    if !was && db.hash_existing() {
+        app.state::<Social>().dirty.lock().unwrap().insert(id.to_string());
+    }
     f(db)
 }
 
@@ -198,6 +263,7 @@ fn handle(app: &AppHandle, cmd: BotCmd) -> String {
     let state = app.state::<AppState>();
     match cmd {
         BotCmd::Help => notify::BOT_HELP.into(),
+        BotCmd::Id => String::new(), // обрабатывается в цикле бота
         BotCmd::Status => status_text(app),
         BotCmd::Unknown(c) => format!("Не знаю команду /{c}. /help — список команд"),
         BotCmd::Players(q) => match find_server(app, q.as_deref()) {
@@ -267,6 +333,120 @@ fn handle(app: &AppHandle, cmd: BotCmd) -> String {
     }
 }
 
+fn cmd_label(cmd: &BotCmd) -> &'static str {
+    match cmd {
+        BotCmd::Start(_) => "запустить",
+        BotCmd::Stop(_) => "остановить",
+        BotCmd::Restart(_) => "перезапустить",
+        _ => "выполнить",
+    }
+}
+
+fn cmd_server(cmd: &BotCmd) -> Option<&str> {
+    match cmd {
+        BotCmd::Start(q) | BotCmd::Stop(q) | BotCmd::Restart(q) | BotCmd::Backup(q) | BotCmd::Players(q) => q.as_deref(),
+        _ => None,
+    }
+}
+
+/// Лимит: не больше 6 команд в минуту от одного человека.
+fn rate_ok(app: &AppHandle, user: &str) -> bool {
+    let social = app.state::<Social>();
+    let mut r = social.rate.lock().unwrap();
+    let v = r.entry(user.to_string()).or_default();
+    v.retain(|t| t.elapsed() < Duration::from_secs(60));
+    if v.len() >= 6 {
+        return false;
+    }
+    v.push(Instant::now());
+    true
+}
+
+fn process(app: &AppHandle, s: &notify::NotifySettings, u: notify::Update) {
+    let token = &s.telegram_token;
+    let private = u.chat == u.from;
+    // право управлять: в списке администраторов; если список пуст — только владелец в личном чате
+    let allowed = s.is_admin(&u.from) || (s.telegram_admins.is_empty() && private);
+
+    // нажатие кнопки подтверждения
+    if let Some((cb_id, data, msg_id)) = u.callback {
+        let (ok, nonce) = match data.split_once(':') {
+            Some(("ok", n)) => (true, n.to_string()),
+            Some(("no", n)) => (false, n.to_string()),
+            _ => return,
+        };
+        let pend = app.state::<Social>().pending.lock().unwrap().remove(&nonce);
+        let Some((cmd, who, at)) = pend else {
+            notify::telegram_answer(token, &cb_id, "Устарело");
+            notify::telegram_edit(token, &u.chat, msg_id, "⌛ Подтверждение устарело — отправь команду заново");
+            return;
+        };
+        if who != u.from {
+            // чужое подтверждение — возвращаем ожидание обратно
+            app.state::<Social>().pending.lock().unwrap().insert(nonce, (cmd, who, at));
+            notify::telegram_answer(token, &cb_id, "Подтвердить может только тот, кто отправил команду");
+            return;
+        }
+        if !ok {
+            notify::telegram_answer(token, &cb_id, "Отменено");
+            notify::telegram_edit(token, &u.chat, msg_id, "✖ Отменено");
+            return;
+        }
+        if at.elapsed() > Duration::from_secs(120) || !allowed {
+            notify::telegram_answer(token, &cb_id, "Нельзя");
+            notify::telegram_edit(token, &u.chat, msg_id, "⌛ Подтверждение устарело — отправь команду заново");
+            return;
+        }
+        notify::telegram_answer(token, &cb_id, "Ок");
+        let reply = handle(app, cmd);
+        notify::telegram_edit(token, &u.chat, msg_id, &format!("{reply} (подтвердил {})", u.from_name));
+        return;
+    }
+
+    let Some(cmd) = notify::parse_cmd(&u.text) else { return };
+    if !rate_ok(app, &u.from) {
+        return;
+    }
+    if cmd == BotCmd::Id {
+        let _ = notify::telegram_send(token, &u.chat, &format!("Твой Telegram id: {}\nId этого чата: {}", u.from, u.chat));
+        return;
+    }
+    if cmd.dangerous() && !allowed {
+        let _ = notify::telegram_send(
+            token,
+            &u.chat,
+            "⛔ Управлять серверами могут только администраторы. Напиши /id и попроси владельца добавить твой id в настройках менеджера.",
+        );
+        return;
+    }
+    if cmd.needs_confirm() {
+        // сначала проверим, что сервер указан верно, чтобы не спрашивать зря
+        if let Err(e) = find_server(app, cmd_server(&cmd)) {
+            let _ = notify::telegram_send(token, &u.chat, &e);
+            return;
+        }
+        let name = find_server(app, cmd_server(&cmd)).map(|x| x.name).unwrap_or_default();
+        let nonce = pcm_core::util::short_id();
+        {
+            let social = app.state::<Social>();
+            let mut p = social.pending.lock().unwrap();
+            p.retain(|_, v| v.2.elapsed() < Duration::from_secs(300));
+            p.insert(nonce.clone(), (cmd.clone(), u.from.clone(), Instant::now()));
+        }
+        let _ = notify::telegram_send_buttons(
+            token,
+            &u.chat,
+            &format!("{}: {} «{name}»?", u.from_name, cmd_label(&cmd)),
+            &[("✅ Да", format!("ok:{nonce}")), ("✖ Отмена", format!("no:{nonce}"))],
+        );
+        return;
+    }
+    let reply = handle(app, cmd);
+    if !reply.is_empty() {
+        let _ = notify::telegram_send(token, &u.chat, &reply);
+    }
+}
+
 pub fn start_bot(app: AppHandle) {
     std::thread::Builder::new()
         .name("pcm-telegram".into())
@@ -285,17 +465,15 @@ pub fn start_bot(app: AppHandle) {
                     offset = notify::telegram_updates(&s.telegram_token, -1, 0).map(|(o, _)| o).unwrap_or(0);
                 }
                 match notify::telegram_updates(&s.telegram_token, offset, 25) {
-                    Ok((next, msgs)) => {
+                    Ok((next, ups)) => {
                         offset = next;
-                        for (chat, text) in msgs {
+                        let chat = notify::normalize_chat(&s.telegram_chat);
+                        for u in ups {
                             // только «свой» чат — остальным бот не отвечает вообще
-                            if chat != s.telegram_chat.trim() {
+                            if u.chat != chat {
                                 continue;
                             }
-                            if let Some(cmd) = notify::parse_cmd(&text) {
-                                let reply = handle(&app, cmd);
-                                let _ = notify::telegram_send(&s.telegram_token, &chat, &reply);
-                            }
+                            process(&app, &s, u);
                         }
                     }
                     Err(_) => std::thread::sleep(Duration::from_secs(15)),

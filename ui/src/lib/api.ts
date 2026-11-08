@@ -50,6 +50,9 @@ export interface ServerEntry {
     repo_path: string;
     password: string;
     keep_last: number;
+    keep_daily: number;
+    keep_weekly: number;
+    keep_monthly: number;
     excludes: string[];
     copy_repo: string;
     copy_env: string[];
@@ -95,6 +98,7 @@ export interface Config {
   servers_root: string;
   network_monitor: boolean;
   simple_mode: boolean;
+  hash_player_ips: boolean;
   notify: NotifySettings;
   selected: string;
   servers: ServerEntry[];
@@ -301,6 +305,7 @@ export const api = {
   logsSearch: (id: string, query: string) => invoke<LogHit[]>("logs_search", { id, query }),
   logsClean: (id: string, days: number) => invoke<CleanResult>("logs_clean", { id, days }),
   setSimpleMode: (on: boolean) => invoke<void>("set_simple_mode", { on }),
+  setHashIps: (on: boolean) => invoke<void>("set_hash_ips", { on }),
   telegramFindChat: (token: string) => invoke<{ id: string; name: string }>("telegram_find_chat", { token }),
   openPath: (path: string) => invoke<void>("open_path", { path, reveal: false }),
   revealPath: (path: string) => invoke<void>("open_path", { path, reveal: true }),
@@ -510,11 +515,17 @@ export interface NotifySettings {
   disk_low_gb: number;
   on_join: boolean;
   on_net_bad: boolean;
+  telegram_admins: string[];
+  quiet_from: string;
+  quiet_to: string;
+  quiet_allow_crash: boolean;
+  min_interval_min: number;
 }
 export const DEFAULT_NOTIFY: NotifySettings = {
   telegram_token: "", telegram_chat: "", telegram_bot: false, discord_webhook: "",
   on_crash: true, on_start: false, on_stop: false, on_low_tps: true, low_tps: 15,
   on_backup_fail: true, on_disk_low: true, disk_low_gb: 5, on_join: false, on_net_bad: false,
+  telegram_admins: [], quiet_from: "", quiet_to: "", quiet_allow_crash: true, min_interval_min: 0,
 };
 
 export interface PlayerRow {

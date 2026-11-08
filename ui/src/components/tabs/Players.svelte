@@ -67,6 +67,16 @@
   };
   const time = (sec: number) => new Date(sec * 1000).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" });
   const head = "https://mc-heads.net/avatar/";
+  async function toggleHash(e: Event) {
+    const on = (e.currentTarget as HTMLInputElement).checked;
+    try {
+      await api.setHashIps(on);
+      if (app.config) app.config.hash_player_ips = on;
+      setTimeout(load, 300);
+    } catch (err) {
+      fail(err);
+    }
+  }
 </script>
 
 <div class="layout">
@@ -150,6 +160,7 @@
         {/each}
       </section>
     {/if}
+    <label class="check small privacy"><input type="checkbox" checked={!!app.config?.hash_player_ips} onchange={toggleHash} />{t("pl2.hashIps")}</label>
   </div>
 
   <aside class="side">
@@ -197,6 +208,7 @@
   .w { min-width: 7.5em; text-align: right; }
   .details { display: grid; gap: 8px; padding: 0 12px 12px 64px; }
   .details input { height: 2em; }
+  .privacy { color: var(--muted); }
   .alts { padding: 10px 14px; display: grid; gap: 4px; }
   .alts h3 { display: flex; align-items: center; gap: 6px; font-size: 0.92em; color: var(--warn); }
   .side { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); padding: 12px; gap: 8px; }

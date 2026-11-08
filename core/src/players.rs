@@ -93,6 +93,23 @@ pub struct PlayerDb {
     pub players: BTreeMap<String, PlayerRec>,
     pub chat: VecDeque<ChatLine>,
     pub audit: VecDeque<AuditLine>,
+    /// Если задано — IP хранятся только хэшем (для поиска твинков этого достаточно)
+    #[serde(skip)]
+    pub ip_salt: Option<String>,
+}
+
+fn is_local_ip(ip: &str) -> bool {
+    ip.starts_with("127.") || ip.starts_with("192.168.") || ip.starts_with("10.") || ip == "::1"
+}
+
+/// Хэш IP с солью этой установки: одинаковые IP дают одинаковый хэш, но сам адрес не восстановить.
+pub fn hash_ip(salt: &str, ip: &str) -> String {
+    use sha2::{Digest, Sha256};
+    if ip.starts_with('#') || is_local_ip(ip) {
+        return ip.to_string();
+    }
+    let h = Sha256::digest(format!("{salt}|{ip}").as_bytes());
+    format!("#{}", h.iter().take(5).map(|b| format!("{b:02x}")).collect::<String>())
 }
 
 fn now() -> i64 {
@@ -126,6 +143,10 @@ impl PlayerDb {
     pub fn apply_at(&mut self, ev: &Event, t: i64) -> bool {
         match ev {
             Event::Login { name, ip } => {
+                let ip = &match &self.ip_salt {
+                    Some(s) => hash_ip(s, ip),
+                    None => ip.clone(),
+                };
                 let r = self.players.entry(name.clone()).or_default();
                 if !r.ips.contains(ip) {
                     r.ips.push(ip.clone());
@@ -167,6 +188,23 @@ impl PlayerDb {
         }
     }
 
+    /// Включили хранение хэшей — переводим уже сохранённые адреса.
+    pub fn hash_existing(&mut self) -> bool {
+        let Some(salt) = self.ip_salt.clone() else { return false };
+        let mut changed = false;
+        for r in self.players.values_mut() {
+            for ip in r.ips.iter_mut() {
+                let h = hash_ip(&salt, ip);
+                if h != *ip {
+                    *ip = h;
+                    changed = true;
+                }
+            }
+            r.ips.dedup();
+        }
+        changed
+    }
+
     /// Сервер остановился — все сессии закрываются.
     pub fn close_all(&mut self) {
         let t = now();
@@ -192,7 +230,7 @@ impl PlayerDb {
         for (n, r) in &self.players {
             for ip in &r.ips {
                 // локальные адреса (сам хост, домашняя сеть) не показательны
-                if ip.starts_with("127.") || ip.starts_with("192.168.") || ip.starts_with("10.") {
+                if is_local_ip(ip) {
                     continue;
                 }
                 by_ip.entry(ip).or_default().push(n.clone());
@@ -326,5 +364,25 @@ mod tests {
         assert_eq!(l.ops, vec!["Admin"]);
         assert_eq!(l.banned, vec![("Griefer".to_string(), "гриф".to_string())]);
         assert!(l.whitelist_on);
+    }
+
+    #[test]
+    fn hashed_ips_still_find_alts() {
+        let mut db = PlayerDb { ip_salt: Some("salt".into()), ..Default::default() };
+        db.apply_at(&Event::Login { name: "A".into(), ip: "93.1.1.1".into() }, 1);
+        db.apply_at(&Event::Login { name: "B".into(), ip: "93.1.1.1".into() }, 2);
+        db.apply_at(&Event::Login { name: "C".into(), ip: "192.168.0.5".into() }, 3);
+        let a = &db.players["A"].ips[0];
+        assert!(a.starts_with('#') && !a.contains("93.1"));
+        assert_eq!(db.shared_ips().len(), 1);
+        assert_eq!(db.players["C"].ips[0], "192.168.0.5");
+        // старые открытые адреса переводятся
+        let mut old = PlayerDb::default();
+        old.apply_at(&Event::Login { name: "X".into(), ip: "8.8.8.8".into() }, 1);
+        old.ip_salt = Some("salt".into());
+        assert!(old.hash_existing());
+        assert!(old.players["X"].ips[0].starts_with('#'));
+        // хэш не сохраняется в файл как настройка
+        assert!(!serde_json::to_string(&db).unwrap().contains("ip_salt"));
     }
 }

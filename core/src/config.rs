@@ -183,6 +183,10 @@ pub struct BackupSettings {
     pub password: String,
     /// Сколько последних снапшотов хранить (0 = все)
     pub keep_last: u32,
+    /// Политика хранения: сколько дневных / недельных / месячных снапшотов оставлять (0 — не учитывать)
+    pub keep_daily: u32,
+    pub keep_weekly: u32,
+    pub keep_monthly: u32,
     /// Что не включать в снапшот (шаблоны restic, относительно папки сервера)
     pub excludes: Vec<String>,
     /// Второе хранилище (правило 3-2-1): папка на другом диске, `sftp:user@host:/path`,
@@ -202,7 +206,10 @@ impl Default for BackupSettings {
             snapshot_on_start: true,
             repo_path: String::new(),
             password: String::new(),
-            keep_last: 30,
+            keep_last: 10,
+            keep_daily: 7,
+            keep_weekly: 4,
+            keep_monthly: 6,
             excludes: vec![
                 "logs".into(),
                 "crash-reports".into(),
@@ -387,6 +394,10 @@ pub struct Config {
     pub network_monitor: bool,
     /// Простой режим: только основные вкладки
     pub simple_mode: bool,
+    /// Хранить IP игроков только хэшем
+    pub hash_player_ips: bool,
+    /// Соль для хэшей IP (создаётся один раз)
+    pub ip_salt: String,
     /// Уведомления в Telegram / Discord
     pub notify: crate::notify::NotifySettings,
     /// Последний выбранный сервер
@@ -407,6 +418,8 @@ impl Default for Config {
             servers_root: String::new(),
             network_monitor: true,
             simple_mode: false,
+            hash_player_ips: false,
+            ip_salt: String::new(),
             notify: Default::default(),
             selected: String::new(),
             servers: vec![],
@@ -418,7 +431,7 @@ impl Config {
     pub fn load(paths: &AppPaths) -> Self {
         let file = paths.config_file();
         match fs::read_to_string(&file) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+            Ok(s) => serde_json::from_str::<Config>(&s).map(Config::decrypted).unwrap_or_else(|e| {
                 // испорченный конфиг не теряем: сохраняем копию рядом
                 let _ = fs::copy(&file, file.with_extension("json.broken"));
                 log::error!("config.json повреждён ({e}), создан новый");
@@ -433,9 +446,27 @@ impl Config {
         paths.ensure()?;
         let file = paths.config_file();
         let tmp = file.with_extension("json.tmp");
-        fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
+        fs::write(&tmp, serde_json::to_string_pretty(&self.encrypted())?)?;
         fs::rename(&tmp, &file)?;
         Ok(())
+    }
+
+    /// Копия для записи на диск: секреты зашифрованы (DPAPI на Windows).
+    fn encrypted(&self) -> Config {
+        use crate::secret::protect;
+        let mut c = self.clone();
+        c.curseforge_key = protect(&c.curseforge_key);
+        c.notify.telegram_token = protect(&c.notify.telegram_token);
+        c.notify.discord_webhook = protect(&c.notify.discord_webhook);
+        c
+    }
+
+    fn decrypted(mut self) -> Config {
+        use crate::secret::unprotect;
+        self.curseforge_key = unprotect(&self.curseforge_key);
+        self.notify.telegram_token = unprotect(&self.notify.telegram_token);
+        self.notify.discord_webhook = unprotect(&self.notify.discord_webhook);
+        self
     }
 
     pub fn server(&self, id: &str) -> Option<&ServerEntry> {

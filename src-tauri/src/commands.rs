@@ -355,9 +355,9 @@ fn snapshot_with_events(app: &AppHandle, server: &ServerEntry, tag: &str) -> R<B
         Ok(r) => {
             emit_backup(app, &server.id, "done", None, r.snapshot_id.clone());
             // чистка старых снапшотов — в фоне, она может занять время
-            let keep = server.backup.keep_last;
+            let policy = server.backup.clone();
             std::thread::spawn(move || {
-                let _ = repo.forget(keep);
+                let _ = repo.apply_retention(&policy);
             });
         }
         Err(err) => {
@@ -1697,4 +1697,10 @@ pub async fn telegram_find_chat(token: String) -> R<FoundChat> {
         None => Err("бот пока не получил сообщений: открой его в Telegram, нажми «Start» (или напиши любое сообщение) и нажми кнопку ещё раз".into()),
     })
     .await
+}
+
+#[tauri::command]
+pub fn set_hash_ips(state: State<AppState>, on: bool) -> R<()> {
+    state.config.lock().unwrap().hash_player_ips = on;
+    state.save()
 }

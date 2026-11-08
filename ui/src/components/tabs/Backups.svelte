@@ -17,6 +17,9 @@
   let form = $state({
     on: server.backup.snapshot_on_start,
     keep: server.backup.keep_last,
+    daily: server.backup.keep_daily ?? 7,
+    weekly: server.backup.keep_weekly ?? 4,
+    monthly: server.backup.keep_monthly ?? 6,
     repo: server.backup.repo_path,
     excl: server.backup.excludes.join("\n"),
     copyRepo: server.backup.copy_repo ?? "",
@@ -224,6 +227,9 @@
           ...server.backup,
           snapshot_on_start: form.on,
           keep_last: Math.max(0, Number(form.keep) || 0),
+          keep_daily: Math.max(0, Number(form.daily) || 0),
+          keep_weekly: Math.max(0, Number(form.weekly) || 0),
+          keep_monthly: Math.max(0, Number(form.monthly) || 0),
           repo_path: form.repo.trim(),
           excludes: form.excl.split("\n").map((x) => x.trim()).filter(Boolean),
           copy_repo: form.copyRepo.trim(),
@@ -312,6 +318,12 @@
     <div class="grid">
       <label class="field"><span>{t("bk.keep")}<Hint text={t("hn.keep")} /></span><input type="number" min="0" bind:value={form.keep} /></label>
       <label class="field"><span>{t("bk.repoPath")}</span><input bind:value={form.repo} placeholder={app.paths?.restic_root} /></label>
+    </div>
+    <div class="keep4">
+      <span class="muted small">{t("rt.title")}<Hint text={t("rt.hint")} /></span>
+      <label class="field"><span>{t("rt.daily")}</span><input type="number" min="0" bind:value={form.daily} /></label>
+      <label class="field"><span>{t("rt.weekly")}</span><input type="number" min="0" bind:value={form.weekly} /></label>
+      <label class="field"><span>{t("rt.monthly")}</span><input type="number" min="0" bind:value={form.monthly} /></label>
     </div>
     <label class="field"><span>{t("bk.excludes")}</span><textarea rows="4" bind:value={form.excl}></textarea></label>
     <div><button class="btn primary sm" type="submit">{t("act.save")}</button></div>
@@ -436,6 +448,8 @@
   .settings { padding: 16px 18px; display: grid; gap: 12px; max-width: 760px; }
   .grid { display: grid; grid-template-columns: 240px 1fr; gap: 12px; }
   .small { font-size: 0.86em; }
+  .keep4 { display: grid; grid-template-columns: repeat(3, minmax(0, 160px)); gap: 6px 12px; }
+  .keep4 > span { grid-column: 1 / -1; }
   .settings p { margin: 0; }
   .journal { display: grid; gap: 3px; max-height: 300px; overflow: auto; }
   .jrow { display: flex; align-items: baseline; gap: 8px; font-size: 0.9em; }

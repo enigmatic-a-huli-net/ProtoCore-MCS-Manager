@@ -331,10 +331,20 @@ impl Repo {
 
     /// Удаляет старые снапшоты, оставляя `keep_last` последних, и чистит место.
     pub fn forget(&self, keep_last: u32) -> Result<()> {
-        if keep_last == 0 || !self.is_initialized() {
+        let b = crate::config::BackupSettings { keep_last, keep_daily: 0, keep_weekly: 0, keep_monthly: 0, ..Default::default() };
+        self.apply_retention(&b)
+    }
+
+    /// Политика хранения: последние N + дневные/недельные/месячные. Всё по нулям — ничего не удаляется.
+    pub fn apply_retention(&self, b: &crate::config::BackupSettings) -> Result<()> {
+        let keep = retention_args(b);
+        if keep.is_empty() || !self.is_initialized() {
             return Ok(());
         }
-        self.run(&["forget".into(), "--keep-last".into(), keep_last.to_string(), "--prune".into()])?;
+        let mut args: Vec<String> = vec!["forget".into()];
+        args.extend(keep.into_iter().map(String::from));
+        args.push("--prune".into());
+        self.run(&args)?;
         Ok(())
     }
 
@@ -541,6 +551,17 @@ impl Repo {
     }
 }
 
+pub fn retention_args(b: &crate::config::BackupSettings) -> Vec<String> {
+    let mut v = Vec::new();
+    for (flag, n) in [("--keep-last", b.keep_last), ("--keep-daily", b.keep_daily), ("--keep-weekly", b.keep_weekly), ("--keep-monthly", b.keep_monthly)] {
+        if n > 0 {
+            v.push(flag.to_string());
+            v.push(n.to_string());
+        }
+    }
+    v
+}
+
 /// Внутри restic пути Windows хранятся как `/C/Users/...`.
 pub fn restic_inner_path(p: &str) -> String {
     let p = p.replace('\\', "/");
@@ -636,6 +657,56 @@ mod tests {
     fn bytes() {
         assert_eq!(human_bytes(512), "512 Б");
         assert_eq!(human_bytes(1536), "1.5 КБ");
+    }
+
+    /// Откат: изменённое возвращается, лишнее удаляется, но исключённые папки
+    /// (логи, restored, бэкапы других программ) откат НЕ трогает.
+    #[test]
+    fn rollback_keeps_excluded_if_available() {
+        let t = tempfile::tempdir().unwrap();
+        let paths = AppPaths::from_base(t.path().join("mgr"));
+        if find_restic(&paths).is_none() {
+            return;
+        }
+        let srv = t.path().join("srv");
+        fs::create_dir_all(srv.join("world")).unwrap();
+        fs::create_dir_all(srv.join("logs")).unwrap();
+        fs::write(srv.join("world/level.dat"), "good").unwrap();
+        fs::write(srv.join("logs/latest.log"), "log-1").unwrap();
+        let mut s = ServerEntry { id: "r1".into(), name: "R".into(), path: srv.to_string_lossy().into(), ..Default::default() };
+        s.backup.password = "pw".into();
+        let excludes = s.backup.excludes.clone();
+        assert!(excludes.iter().any(|e| e == "logs") && excludes.iter().any(|e| e == "restored"));
+        let repo = Repo::for_server(&paths, &s).unwrap();
+        repo.backup(&srv, &excludes, &["t"], |_| {}).unwrap();
+        let snap = repo.snapshots().unwrap().remove(0);
+
+        // после снапшота: мир испорчен, появился мусорный файл, лог дописан, есть restored/
+        fs::write(srv.join("world/level.dat"), "griefed").unwrap();
+        fs::write(srv.join("world/junk.dat"), "x").unwrap();
+        fs::write(srv.join("logs/latest.log"), "log-2").unwrap();
+        fs::create_dir_all(srv.join("restored/abc")).unwrap();
+        fs::write(srv.join("restored/abc/keep.txt"), "mine").unwrap();
+
+        repo.restore(&snap, &srv, &excludes).unwrap();
+        assert_eq!(fs::read_to_string(srv.join("world/level.dat")).unwrap(), "good");
+        assert!(!srv.join("world/junk.dat").exists(), "лишний файл мира должен удалиться");
+        assert_eq!(fs::read_to_string(srv.join("logs/latest.log")).unwrap(), "log-2", "логи откат не трогает");
+        assert_eq!(fs::read_to_string(srv.join("restored/abc/keep.txt")).unwrap(), "mine", "restored/ откат не трогает");
+    }
+
+    #[test]
+    fn retention_policy() {
+        let mut b = crate::config::BackupSettings::default();
+        b.keep_last = 5;
+        b.keep_daily = 7;
+        b.keep_weekly = 0;
+        b.keep_monthly = 6;
+        assert_eq!(super::retention_args(&b), vec!["--keep-last", "5", "--keep-daily", "7", "--keep-monthly", "6"]);
+        b.keep_last = 0;
+        b.keep_daily = 0;
+        b.keep_monthly = 0;
+        assert!(super::retention_args(&b).is_empty(), "всё по нулям — ничего не удаляем");
     }
 
     /// Просмотр снапшота, точечное восстановление, сравнение и копия во второе хранилище.

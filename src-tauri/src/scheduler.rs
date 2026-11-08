@@ -161,6 +161,7 @@ fn alerts(app: &AppHandle) {
 
 fn tick(app: &AppHandle) {
     crate::social::flush(app);
+    crate::social::release_held(app);
     alerts(app);
     let state = app.state::<AppState>();
     let sched = app.state::<Sched>();

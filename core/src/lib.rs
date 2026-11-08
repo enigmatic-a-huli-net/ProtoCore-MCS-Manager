@@ -37,6 +37,7 @@ pub mod network;
 pub mod players;
 pub mod plugins;
 pub mod preflight;
+pub mod secret;
 pub mod process;
 pub mod props;
 pub mod schedule;

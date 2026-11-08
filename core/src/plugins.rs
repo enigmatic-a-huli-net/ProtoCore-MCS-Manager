@@ -219,6 +219,9 @@ pub fn list(server_dir: &Path) -> PluginReport {
 }
 
 pub fn set_enabled(server_dir: &Path, file: &str, enable: bool, reason: &str) -> Result<PathBuf> {
+    if !crate::mods::plain_file_name(file) {
+        return Err(crate::Error::other(format!("недопустимое имя файла: {file}")));
+    }
     let en = server_dir.join(ENABLED_DIR);
     let dis = server_dir.join(DISABLED_DIR);
     let (from, to) = if enable { (&dis, &en) } else { (&en, &dis) };
