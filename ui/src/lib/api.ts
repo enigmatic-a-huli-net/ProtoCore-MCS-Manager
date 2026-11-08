@@ -99,6 +99,7 @@ export interface Config {
   network_monitor: boolean;
   simple_mode: boolean;
   hash_player_ips: boolean;
+  sounds: SoundSettings;
   notify: NotifySettings;
   selected: string;
   servers: ServerEntry[];
@@ -306,6 +307,12 @@ export const api = {
   logsClean: (id: string, days: number) => invoke<CleanResult>("logs_clean", { id, days }),
   setSimpleMode: (on: boolean) => invoke<void>("set_simple_mode", { on }),
   setHashIps: (on: boolean) => invoke<void>("set_hash_ips", { on }),
+  cfgList: (id: string) => invoke<CfgFile[]>("cfg_list", { id }),
+  cfgLoad: (id: string, rel: string) => invoke<CfgLoaded>("cfg_load", { id, rel }),
+  cfgSave: (id: string, rel: string, changes: { path: string; value: string }[]) => invoke<CfgLoaded>("cfg_save", { id, rel, changes }),
+  cfgSaveText: (id: string, rel: string, text: string) => invoke<CfgLoaded>("cfg_save_text", { id, rel, text }),
+  saveSounds: (sounds: SoundSettings) => invoke<void>("save_sounds", { sounds }),
+  soundTest: (kind: SoundKind, volume: number) => invoke<void>("sound_test", { kind, volume }),
   telegramFindChat: (token: string) => invoke<{ id: string; name: string }>("telegram_find_chat", { token }),
   openPath: (path: string) => invoke<void>("open_path", { path, reveal: false }),
   revealPath: (path: string) => invoke<void>("open_path", { path, reveal: true }),
@@ -439,6 +446,13 @@ export interface FileRef {
 
 export interface PlanItem { title: string; icon_url: string; file: FileRef; reason: "selected" | "dependency" | "update" | "fix"; replaces: string | null }
 export interface Plan { items: PlanItem[]; already: string[]; warnings: string[] }
+
+export interface SoundSettings { enabled: boolean; volume: number; on_start: boolean; on_stop: boolean; on_crash: boolean; on_join: boolean; on_warn: boolean }
+export const DEFAULT_SOUNDS: SoundSettings = { enabled: true, volume: 60, on_start: true, on_stop: false, on_crash: true, on_join: false, on_warn: true };
+export type SoundKind = "start" | "stop" | "crash" | "join" | "warn";
+export interface CfgFile { rel: string; group: "core" | "mods" | "plugins"; title: string; format: "properties" | "yaml" | "toml"; size: number }
+export interface CfgEntry { path: string; key: string; value: string; kind: "bool" | "int" | "float" | "str" | "raw"; editable: boolean; line: number; comment: string; hint: string }
+export interface CfgLoaded { rel: string; format: string; text: string; entries: CfgEntry[] }
 
 export interface JavaInstall { path: string; major: number; version: string; vendor: string; source: string }
 export interface PreCheck { id: string; level: "error" | "warn" | "ok"; title: string; detail: string; fix: string }

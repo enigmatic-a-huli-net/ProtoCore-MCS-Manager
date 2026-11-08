@@ -8,7 +8,7 @@
   import Plugins from "./tabs/Plugins.svelte";
   import Backups from "./tabs/Backups.svelte";
   import Launch from "./tabs/Launch.svelte";
-  import Properties from "./tabs/Properties.svelte";
+  import Configs from "./tabs/Configs.svelte";
   import Schedule from "./tabs/Schedule.svelte";
   import Network from "./tabs/Network.svelte";
   import Players from "./tabs/Players.svelte";
@@ -181,7 +181,7 @@
     {:else if app.tab === "schedule"}<Schedule {server} />
     {:else if app.tab === "optimize"}<Optimize {server} />
     {:else if app.tab === "launch"}<Launch {server} />
-    {:else if app.tab === "properties"}<Properties {server} />
+    {:else if app.tab === "properties"}<Configs {server} />
     {/if}
   </div>
 </section>

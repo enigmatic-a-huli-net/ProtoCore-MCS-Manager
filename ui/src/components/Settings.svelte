@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
-  import { api, DEFAULT_NOTIFY, type NotifySettings, type Theme } from "../lib/api";
+  import { api, DEFAULT_NOTIFY, DEFAULT_SOUNDS, type NotifySettings, type SoundKind, type SoundSettings, type Theme } from "../lib/api";
   import { app, t, toast, fail } from "../lib/store.svelte";
   import { applyTheme, ACCENTS, DEFAULT_THEME } from "../lib/theme";
   import { logo } from "../lib/brand";
@@ -61,8 +61,13 @@
     }
   }
 
+  let snd = $state<SoundSettings>({ ...DEFAULT_SOUNDS, ...(c.sounds ?? {}) });
+  const SOUND_KINDS: SoundKind[] = ["start", "crash", "stop", "join", "warn"];
+
   async function save() {
     try {
+      await api.saveSounds($state.snapshot(snd) as SoundSettings);
+      app.config!.sounds = $state.snapshot(snd) as SoundSettings;
       const settings = { language: lang, theme: $state.snapshot(theme) as Theme, close_to_tray: tray, console_lines: Number(lines), check_updates: checkUpdates, curseforge_key: cfKey, servers_root: serversRoot, network_monitor: netmon, notify: $state.snapshot(nt) as NotifySettings };
       await api.saveSettings(settings);
       Object.assign(app.config!, settings);
@@ -175,6 +180,23 @@
   </section>
 
   <section class="panel">
+    <h3>{t("snd.title")}</h3>
+    <p class="muted small" style="margin:0">{t("snd.text")}</p>
+    <div class="row wrap sndtop">
+      <label class="check"><input type="checkbox" bind:checked={snd.enabled} />{t("snd.enabled")}</label>
+      <label class="vol"><span class="muted small">{t("snd.volume")}</span><input type="range" min="0" max="100" step="5" bind:value={snd.volume} disabled={!snd.enabled} /><span class="muted small">{snd.volume}%</span></label>
+    </div>
+    <div class="events">
+      {#each SOUND_KINDS as k}
+        <div class="sndrow">
+          <label class="check"><input type="checkbox" bind:checked={snd[`on_${k}` as keyof SoundSettings] as boolean} disabled={!snd.enabled} />{t(`snd.${k}` as any)}</label>
+          <button type="button" class="btn ghost sm icon" title={t("snd.test")} onclick={() => api.soundTest(k, snd.volume).catch(fail)}><Icon name="play" size={12} /></button>
+        </div>
+      {/each}
+    </div>
+  </section>
+
+  <section class="panel">
     <h3>{t("nt.title")}</h3>
     <p class="muted small" style="margin:0">{t("nt.text")}</p>
     <div class="grid">
@@ -229,6 +251,10 @@
 </div>
 
 <style>
+  .sndtop { gap: 18px; align-items: center; }
+  .vol { display: inline-flex; align-items: center; gap: 8px; }
+  .vol input { width: 160px; }
+  .sndrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .quiet { gap: 8px; align-items: center; }
   .quiet input[type="time"] { width: 7.5em; }
   .page { flex: 1; padding: 22px 26px; display: grid; align-content: start; gap: 16px; max-width: 820px; }

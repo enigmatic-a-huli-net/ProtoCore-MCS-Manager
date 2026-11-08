@@ -26,6 +26,26 @@ pub struct Social {
     pending: Mutex<HashMap<String, (BotCmd, String, Instant)>>,
     /// бот: время последних команд каждого пользователя
     rate: Mutex<HashMap<String, Vec<Instant>>>,
+    /// когда последний раз играли звук по ключу
+    sounded: Mutex<HashMap<String, Instant>>,
+}
+
+/// Звуковое оповещение (не чаще раза в `every` по одному ключу).
+pub fn sound(app: &AppHandle, s: pcm_core::sound::Sound, key: &str, every: Duration) {
+    let st = app.state::<AppState>();
+    let settings = st.config.lock().unwrap().sounds.clone();
+    if !s.enabled_in(&settings) {
+        return;
+    }
+    {
+        let social = app.state::<Social>();
+        let mut m = social.sounded.lock().unwrap();
+        if m.get(key).is_some_and(|t| t.elapsed() < every) {
+            return;
+        }
+        m.insert(key.to_string(), Instant::now());
+    }
+    pcm_core::sound::play(s, &settings, &st.paths.branding, false);
 }
 
 fn minute_now() -> u32 {
@@ -44,6 +64,11 @@ fn server_name(app: &AppHandle, id: &str) -> String {
 
 /// Уведомление в фоне. `key` + `every` — не чаще одного раза за интервал.
 pub fn notify(app: &AppHandle, key: &str, every: Duration, text: String) {
+    // предупреждения (бэкап, диск, TPS, сеть) — ещё и звуком
+    let kind = key.split(':').next().unwrap_or("");
+    if !matches!(kind, "crash" | "start" | "stop" | "join") {
+        sound(app, pcm_core::sound::Sound::Warn, key, every.min(Duration::from_secs(600)));
+    }
     let s = app.state::<AppState>().config.lock().unwrap().notify.clone();
     if !s.any() {
         return;
@@ -160,6 +185,9 @@ pub fn on_log(app: &AppHandle, id: &str, lines: &[LogLine]) {
     if changed {
         mark(app, id);
     }
+    if !joined.is_empty() {
+        sound(app, pcm_core::sound::Sound::Join, &format!("join:{id}"), Duration::from_secs(3));
+    }
     if !joined.is_empty() && app.state::<AppState>().config.lock().unwrap().notify.on_join {
         let n = server_name(app, id);
         for p in joined {
@@ -174,6 +202,7 @@ pub fn on_status(app: &AppHandle, id: &str, info: &StatusInfo) {
     }
     let prev = app.state::<Social>().last_status.lock().unwrap().insert(id.to_string(), info.status);
     if info.status == Status::Running && prev != Some(Status::Running) {
+        sound(app, pcm_core::sound::Sound::Start, &format!("start:{id}"), Duration::from_secs(5));
         let s = app.state::<AppState>().config.lock().unwrap().notify.clone();
         if s.on_start {
             notify(app, &format!("start:{id}"), Duration::from_secs(30), format!("✅ «{}» запущен", server_name(app, id)));
@@ -189,6 +218,11 @@ pub fn on_exit(app: &AppHandle, id: &str, info: &ExitInfo) {
     mark(app, id);
     let s = app.state::<AppState>().config.lock().unwrap().notify.clone();
     let n = server_name(app, id);
+    if info.crashed {
+        sound(app, pcm_core::sound::Sound::Crash, &format!("crash:{id}"), Duration::from_secs(20));
+    } else {
+        sound(app, pcm_core::sound::Sound::Stop, &format!("stop:{id}"), Duration::from_secs(5));
+    }
     if info.crashed && s.on_crash {
         let code = info.code.map(|c| format!(" (код {c})")).unwrap_or_default();
         let when = if info.reached_running { "во время работы" } else { "при запуске" };

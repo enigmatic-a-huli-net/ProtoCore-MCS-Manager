@@ -1704,3 +1704,72 @@ pub fn set_hash_ips(state: State<AppState>, on: bool) -> R<()> {
     state.config.lock().unwrap().hash_player_ips = on;
     state.save()
 }
+
+// ===================================================================== файлы настроек и звук
+
+fn en(state: &AppState) -> bool {
+    state.config.lock().unwrap().language == "en"
+}
+
+#[tauri::command]
+pub async fn cfg_list(app: AppHandle, id: String) -> R<Vec<pcm_core::cfgfiles::CfgFile>> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        Ok(pcm_core::cfgfiles::discover(&server_of(&state, &id)?.dir()))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn cfg_load(app: AppHandle, id: String, rel: String) -> R<pcm_core::cfgfiles::Loaded> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        pcm_core::cfgfiles::load(&server_of(&state, &id)?.dir(), &rel, en(&state)).map_err(e)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn cfg_save(app: AppHandle, id: String, rel: String, changes: Vec<pcm_core::cfgfiles::Change>) -> R<pcm_core::cfgfiles::Loaded> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let dir = server_of(&state, &id)?.dir();
+        let before = pcm_core::cfgfiles::load(&dir, &rel, false).map_err(e)?;
+        pcm_core::cfgfiles::save_changes(&dir, &rel, &changes).map_err(e)?;
+        let diff: Vec<String> = changes
+            .iter()
+            .map(|c| {
+                let old = before.entries.iter().find(|x| x.path == c.path).map(|x| x.value.clone()).unwrap_or_default();
+                format!("{}: {old} → {}", c.path, c.value)
+            })
+            .collect();
+        journal(&state, &id, "settings", format!("{rel}: {}", diff.join("; ")));
+        pcm_core::cfgfiles::load(&dir, &rel, en(&state)).map_err(e)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn cfg_save_text(app: AppHandle, id: String, rel: String, text: String) -> R<pcm_core::cfgfiles::Loaded> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let dir = server_of(&state, &id)?.dir();
+        pcm_core::cfgfiles::save_text(&dir, &rel, &text).map_err(e)?;
+        journal(&state, &id, "settings", format!("{rel}: изменён вручную (режим «Текст»)"));
+        pcm_core::cfgfiles::load(&dir, &rel, en(&state)).map_err(e)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn save_sounds(state: State<AppState>, sounds: pcm_core::sound::SoundSettings) -> R<()> {
+    state.config.lock().unwrap().sounds = sounds;
+    state.save()
+}
+
+#[tauri::command]
+pub fn sound_test(state: State<AppState>, kind: pcm_core::sound::Sound, volume: u32) {
+    let mut s = state.config.lock().unwrap().sounds.clone();
+    s.volume = volume;
+    pcm_core::sound::play(kind, &s, &state.paths.branding, true);
+}

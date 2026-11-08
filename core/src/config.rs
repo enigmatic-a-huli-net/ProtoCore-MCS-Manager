@@ -394,6 +394,8 @@ pub struct Config {
     pub network_monitor: bool,
     /// Простой режим: только основные вкладки
     pub simple_mode: bool,
+    /// Звуковые оповещения
+    pub sounds: crate::sound::SoundSettings,
     /// Хранить IP игроков только хэшем
     pub hash_player_ips: bool,
     /// Соль для хэшей IP (создаётся один раз)
@@ -418,6 +420,7 @@ impl Default for Config {
             servers_root: String::new(),
             network_monitor: true,
             simple_mode: false,
+            sounds: Default::default(),
             hash_player_ips: false,
             ip_salt: String::new(),
             notify: Default::default(),

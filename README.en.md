@@ -44,6 +44,14 @@
     <td align="center">Players: history, alts, chat</td>
     <td align="center">Snapshots: restore a single file or folder</td>
   </tr>
+  <tr>
+    <td><img src="docs/screenshots/configs.png" alt="Server config"></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td align="center">Core and mod settings with hints</td>
+    <td></td>
+  </tr>
 </table>
 
 The interface is available in Russian and English (Settings → Language). Screenshots show the Russian UI.
@@ -61,6 +69,9 @@ The interface is available in Russian and English (Settings → Language). Scree
 - **Pre-start check** — busy port, a world opened by another process, wrong Java, low disk space —
   caught before launch and explained in plain words.
 - **Console** — live log with highlighting, filter, command history; TPS/MSPT, players, RAM, CPU, uptime.
+- **Server config** — `server.properties`, `bukkit.yml`, `spigot.yml`, `paper-*.yml`, `purpur.yml`, mod (`*.toml`)
+  and plugin configs in one place: toggles, search and hints for 150+ core settings. Only values change —
+  comments stay; a Text mode with syntax checking for everything else.
 - **Auto-restart** on crash with crash-loop protection. **Schedule** — planned restarts with player
   warnings and nightly backups.
 
@@ -100,6 +111,7 @@ The interface is available in Russian and English (Settings → Language). Scree
 
 ### Convenience
 - **Simple mode** (main tabs only) and “?” hints on tricky settings.
+- **Sound alerts** for start, crash, player join and problems — audible even from the tray.
 - Dark/light/system theme, custom accent, corner radius, font size. Russian and English.
 
 ## Security
