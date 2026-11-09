@@ -17,7 +17,8 @@
   let splashDone = $state(false);
 
   onMount(() => {
-    const minShow = new Promise((r) => setTimeout(r, 1400));
+    // анимация логотипа длится ~2.8 с — даём ей доиграть
+    const minShow = new Promise((r) => setTimeout(r, 2900));
     Promise.all([init(), minShow])
       .catch(fail)
       .finally(() => (splashDone = true));

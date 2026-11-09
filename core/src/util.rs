@@ -172,3 +172,73 @@ mod tests {
         assert_eq!(safe_dir_name("///"), "server");
     }
 }
+
+// ===================================================================== иконка сервера
+
+/// Иконка сервера: `server-icon.png` в папке сервера (её видят и игроки в списке серверов),
+/// иначе `icon.png` мира (так её показывает одиночная игра).
+pub fn server_icon_path(server_dir: &Path) -> Option<PathBuf> {
+    let p = server_dir.join("server-icon.png");
+    if p.is_file() {
+        return Some(p);
+    }
+    let level = crate::props::read(server_dir).into_iter().find(|(k, _)| k == "level-name").map(|(_, v)| v).unwrap_or_else(|| "world".into());
+    let w = server_dir.join(level).join("icon.png");
+    w.is_file().then_some(w)
+}
+
+pub fn server_icon(server_dir: &Path) -> Option<String> {
+    let bytes = fs::read(server_icon_path(server_dir)?).ok()?;
+    image_to_data_uri(&bytes, 128)
+}
+
+/// Поставить картинку иконкой: обрезка по центру до квадрата и 64×64 (так требует Minecraft).
+/// Прежняя иконка сохраняется в `server-icon.png.pcm-bak`.
+pub fn set_server_icon(server_dir: &Path, image_path: &Path) -> crate::Result<()> {
+    let bytes = fs::read(image_path)?;
+    let img = image::load_from_memory(&bytes).map_err(|e| crate::Error::other(format!("не удалось открыть картинку: {e}")))?;
+    let side = img.width().min(img.height());
+    let img = img.crop_imm((img.width() - side) / 2, (img.height() - side) / 2, side, side);
+    let img = img.resize_exact(64, 64, image::imageops::FilterType::Lanczos3);
+    let dst = server_dir.join("server-icon.png");
+    if dst.is_file() {
+        let _ = fs::copy(&dst, server_dir.join("server-icon.png.pcm-bak"));
+    }
+    let tmp = server_dir.join("server-icon.png.pcm-tmp");
+    img.save_with_format(&tmp, image::ImageFormat::Png).map_err(|e| crate::Error::other(e.to_string()))?;
+    fs::rename(&tmp, &dst)?;
+    Ok(())
+}
+
+pub fn remove_server_icon(server_dir: &Path) -> crate::Result<()> {
+    let p = server_dir.join("server-icon.png");
+    if p.is_file() {
+        fs::rename(&p, server_dir.join("server-icon.png.pcm-bak"))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod icon_tests {
+    use super::*;
+
+    #[test]
+    fn icon_set_and_read() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path();
+        assert!(server_icon(d).is_none());
+        // иконка мира как запасной вариант
+        fs::create_dir_all(d.join("world")).unwrap();
+        image::RgbaImage::new(64, 64).save(d.join("world/icon.png")).unwrap();
+        assert!(server_icon_path(d).unwrap().ends_with("world/icon.png"));
+        // своя картинка 300×200 → 64×64 server-icon.png
+        let src = d.join("pic.png");
+        image::RgbaImage::from_pixel(300, 200, image::Rgba([200, 90, 220, 255])).save(&src).unwrap();
+        set_server_icon(d, &src).unwrap();
+        let im = image::open(d.join("server-icon.png")).unwrap();
+        assert_eq!((im.width(), im.height()), (64, 64));
+        assert!(server_icon(d).unwrap().starts_with("data:image/png;base64,"));
+        remove_server_icon(d).unwrap();
+        assert!(!d.join("server-icon.png").exists() && d.join("server-icon.png.pcm-bak").exists());
+    }
+}

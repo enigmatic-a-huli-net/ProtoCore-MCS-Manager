@@ -1773,3 +1773,43 @@ pub fn sound_test(state: State<AppState>, kind: pcm_core::sound::Sound, volume: 
     s.volume = volume;
     pcm_core::sound::play(kind, &s, &state.paths.branding, true);
 }
+
+// ===================================================================== иконки серверов, пресеты темы
+
+#[tauri::command]
+pub async fn server_icons(app: AppHandle) -> R<HashMap<String, String>> {
+    bg(move || {
+        let servers = app.state::<AppState>().config.lock().unwrap().servers.clone();
+        Ok(servers.iter().filter_map(|s| pcm_core::util::server_icon(&s.dir()).map(|i| (s.id.clone(), i))).collect())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_server_icon(app: AppHandle, id: String, path: String) -> R<Option<String>> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let dir = server_of(&state, &id)?.dir();
+        pcm_core::util::set_server_icon(&dir, std::path::Path::new(&path)).map_err(e)?;
+        journal(&state, &id, "settings", "Новая иконка сервера (server-icon.png)");
+        Ok(pcm_core::util::server_icon(&dir))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn remove_server_icon(app: AppHandle, id: String) -> R<Option<String>> {
+    bg(move || {
+        let state = app.state::<AppState>();
+        let dir = server_of(&state, &id)?.dir();
+        pcm_core::util::remove_server_icon(&dir).map_err(e)?;
+        Ok(pcm_core::util::server_icon(&dir))
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn save_theme_presets(state: State<AppState>, presets: Vec<pcm_core::config::ThemePreset>) -> R<()> {
+    state.config.lock().unwrap().theme_presets = presets.into_iter().take(50).collect();
+    state.save()
+}

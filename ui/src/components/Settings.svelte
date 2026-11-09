@@ -1,8 +1,9 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import ColorInput from "./ColorInput.svelte";
   import { api, DEFAULT_NOTIFY, DEFAULT_SOUNDS, type NotifySettings, type SoundKind, type SoundSettings, type Theme } from "../lib/api";
   import { app, t, toast, fail } from "../lib/store.svelte";
-  import { applyTheme, ACCENTS, DEFAULT_THEME } from "../lib/theme";
+  import { applyTheme, ACCENTS, DEFAULT_THEME, BUILTIN_PRESETS } from "../lib/theme";
   import { logo } from "../lib/brand";
 
   const c = app.config!;
@@ -82,10 +83,89 @@
   }
 
   const colorFields = [
-    ["background", "set.bg"],
-    ["surface", "set.surface"],
-    ["text", "set.text"],
+    ["background", "set.bg", "--bg"],
+    ["surface", "set.surface", "--surface"],
+    ["surface2", "set.surface2", "--surface-2"],
+    ["line", "set.line", "--line"],
+    ["text", "set.text", "--text"],
+    ["muted", "set.muted", "--muted"],
+    ["console", "set.console", "--console"],
+    ["ok", "set.ok", "--ok"],
+    ["warn", "set.warn", "--warn"],
+    ["err", "set.err", "--err"],
+    ["info", "set.info", "--info"],
   ] as const;
+
+  // текущее значение цвета из встроенной темы — показываем как подсказку в поле
+  let builtin = $state<Record<string, string>>({});
+  $effect(() => {
+    theme.mode;
+    const keys = colorFields.map((f) => f[0]);
+    const snapshot = $state.snapshot(theme) as Theme;
+    // сначала без своих цветов, чтобы прочитать встроенные
+    applyTheme({ ...snapshot, ...Object.fromEntries(keys.map((k) => [k, ""])) } as Theme);
+    const cs = getComputedStyle(document.documentElement);
+    builtin = Object.fromEntries(colorFields.map(([k, , v]) => [k, toHex(cs.getPropertyValue(v).trim())]));
+    applyTheme(snapshot);
+  });
+  function toHex(c: string): string {
+    if (c.startsWith("#")) return c;
+    const m = c.match(/\d+(\.\d+)?/g);
+    if (!m || m.length < 3) return "";
+    return "#" + m.slice(0, 3).map((x) => Math.round(Number(x)).toString(16).padStart(2, "0")).join("");
+  }
+
+  // ---------- пресеты
+  let presets = $state<{ name: string; theme: Theme }[]>(($state.snapshot(c.theme_presets ?? []) as { name: string; theme: Theme }[]));
+  let presetName = $state("");
+  function applyPreset(p: { theme: Theme }) {
+    theme = { ...DEFAULT_THEME, ...($state.snapshot(p.theme) as Theme), animations: theme.animations, anim_speed: theme.anim_speed, anim_force: theme.anim_force, font_size: theme.font_size };
+  }
+  async function storePresets() {
+    try {
+      await api.saveThemePresets($state.snapshot(presets) as typeof presets);
+      app.config!.theme_presets = $state.snapshot(presets) as typeof presets;
+    } catch (e) {
+      fail(e);
+    }
+  }
+  async function savePreset() {
+    const name = presetName.trim() || `${t("set.preset")} ${presets.length + 1}`;
+    const p = { name, theme: $state.snapshot(theme) as Theme };
+    const i = presets.findIndex((x) => x.name === name);
+    if (i >= 0) presets[i] = p;
+    else presets.push(p);
+    presetName = "";
+    await storePresets();
+    toast(t("set.presetSaved", { name }), "ok");
+  }
+  async function delPreset(i: number) {
+    presets.splice(i, 1);
+    await storePresets();
+  }
+  // поделиться пресетом: короткий код в буфер обмена и обратно
+  async function copyPreset(p: { name: string; theme: Theme }) {
+    try {
+      await navigator.clipboard.writeText("pcm-theme:" + btoa(unescape(encodeURIComponent(JSON.stringify(p)))));
+      toast(t("set.presetCopied"), "ok");
+    } catch (e) {
+      fail(e);
+    }
+  }
+  async function pastePreset() {
+    try {
+      const s = (await navigator.clipboard.readText()).trim();
+      if (!s.startsWith("pcm-theme:")) throw t("set.presetBad");
+      const p = JSON.parse(decodeURIComponent(escape(atob(s.slice(10))))) as { name: string; theme: Theme };
+      if (!p?.theme?.accent) throw t("set.presetBad");
+      p.theme = { ...DEFAULT_THEME, ...p.theme };
+      presets.push({ name: String(p.name || "Import").slice(0, 40), theme: p.theme });
+      await storePresets();
+      applyPreset(p);
+    } catch (e) {
+      fail(e);
+    }
+  }
 </script>
 
 <div class="page scroll">
@@ -123,20 +203,45 @@
             onclick={() => (theme.accent = a)}
           ></button>
         {/each}
-        <input type="color" bind:value={theme.accent} title={theme.accent} />
+        <ColorInput bind:value={theme.accent} allowEmpty={false} label={t("set.accent")} />
       </div>
     </div>
 
     <div class="field">
       <span>{t("set.custom")}</span>
+      <p class="muted small" style="margin:0">{t("set.customHint")}</p>
       <div class="colors">
         {#each colorFields as [key, label]}
-          <div class="row">
-            <input type="color" value={theme[key] || "#808080"} oninput={(e) => (theme[key] = e.currentTarget.value)} />
-            <span class="grow">{t(label)}</span>
-            {#if theme[key]}<button type="button" class="btn ghost sm icon" onclick={() => (theme[key] = "")} aria-label="reset"><Icon name="x" size={13} /></button>{/if}
+          <div class="crow">
+            <span class="grow">{t(label as any)}</span>
+            <ColorInput bind:value={theme[key]} placeholder={builtin[key] ?? ""} label={t(label as any)} />
           </div>
         {/each}
+      </div>
+    </div>
+
+    <div class="field">
+      <span>{t("set.presets")}</span>
+      <div class="presets">
+        {#each BUILTIN_PRESETS as p}
+          <button type="button" class="preset" onclick={() => applyPreset(p)} title={p.name}>
+            <span class="pv" style:background={p.theme.background || (p.theme.mode === "light" ? "#f1f0f6" : "#17151f")}><i style:background={p.theme.accent}></i></span>{p.name}
+          </button>
+        {/each}
+        {#each presets as p, i}
+          <span class="preset mine">
+            <button type="button" class="pbtn" onclick={() => applyPreset(p)} title={p.name}>
+              <span class="pv" style:background={p.theme.background || (p.theme.mode === "light" ? "#f1f0f6" : "#17151f")}><i style:background={p.theme.accent}></i></span>{p.name}
+            </button>
+            <button type="button" class="pico" title={t("set.presetCopy")} onclick={() => copyPreset(p)}><Icon name="copy" size={11} /></button>
+            <button type="button" class="pico" title={t("set.presetDelete")} onclick={() => delPreset(i)}><Icon name="x" size={11} /></button>
+          </span>
+        {/each}
+      </div>
+      <div class="row">
+        <input class="pname" bind:value={presetName} placeholder={t("set.presetName")} maxlength="40" onkeydown={(e) => e.key === "Enter" && (e.preventDefault(), savePreset())} />
+        <button type="button" class="btn sm" onclick={savePreset}><Icon name="plus" size={13} />{t("set.presetSave")}</button>
+        <button type="button" class="btn ghost sm" onclick={pastePreset}>{t("set.presetPaste")}</button>
       </div>
     </div>
 
@@ -166,7 +271,7 @@
     <label class="check"><input type="checkbox" bind:checked={checkUpdates} />{t("up.auto")}</label>
     <label class="check"><input type="checkbox" bind:checked={netmon} />{t("set.netmon")}</label>
     <div class="grid">
-      <label class="field"><span>{t("set.serversRoot")}</span><input bind:value={serversRoot} placeholder="D:\\Minecraft" /></label>
+      <label class="field"><span>{t("set.serversRoot")}</span><input bind:value={serversRoot} placeholder="D:\Minecraft" /></label>
       <label class="field">
         <span>{t("set.cfKey")}</span>
         <div class="row">
@@ -266,7 +371,18 @@
   .seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 0.15); }
   .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; outline-offset: 2px; }
   .swatch.on { border-color: var(--text); }
-  .colors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .colors { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 22px; }
+  .crow { display: flex; align-items: center; gap: 10px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .preset { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 0.88em; cursor: pointer; }
+  .preset:hover { border-color: var(--accent); }
+  .preset.mine { padding-right: 4px; gap: 2px; cursor: default; }
+  .pbtn { display: inline-flex; align-items: center; gap: 7px; padding: 0 4px 0 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+  .pico { display: grid; place-items: center; width: 20px; height: 20px; border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
+  .pico:hover { background: var(--hover); color: var(--text); }
+  .pv { position: relative; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); flex: none; overflow: hidden; }
+  .pv i { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; border-radius: 50%; }
+  .pname { width: 220px; height: 2em; }
   .narrow { max-width: 220px; }
   .events { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
   .num input[type="number"] { width: 4.5em; height: 1.8em; margin-left: 4px; }

@@ -15,6 +15,14 @@ export interface Theme {
   background: string;
   surface: string;
   text: string;
+  surface2: string;
+  line: string;
+  muted: string;
+  console: string;
+  ok: string;
+  warn: string;
+  err: string;
+  info: string;
   radius: number;
   font_size: number;
   animations: boolean;
@@ -100,6 +108,7 @@ export interface Config {
   simple_mode: boolean;
   hash_player_ips: boolean;
   sounds: SoundSettings;
+  theme_presets: { name: string; theme: Theme }[];
   notify: NotifySettings;
   selected: string;
   servers: ServerEntry[];
@@ -312,6 +321,10 @@ export const api = {
   cfgSave: (id: string, rel: string, changes: { path: string; value: string }[]) => invoke<CfgLoaded>("cfg_save", { id, rel, changes }),
   cfgSaveText: (id: string, rel: string, text: string) => invoke<CfgLoaded>("cfg_save_text", { id, rel, text }),
   saveSounds: (sounds: SoundSettings) => invoke<void>("save_sounds", { sounds }),
+  serverIcons: () => invoke<Record<string, string>>("server_icons"),
+  setServerIcon: (id: string, path: string) => invoke<string | null>("set_server_icon", { id, path }),
+  removeServerIcon: (id: string) => invoke<string | null>("remove_server_icon", { id }),
+  saveThemePresets: (presets: { name: string; theme: Theme }[]) => invoke<void>("save_theme_presets", { presets }),
   soundTest: (kind: SoundKind, volume: number) => invoke<void>("sound_test", { kind, volume }),
   telegramFindChat: (token: string) => invoke<{ id: string; name: string }>("telegram_find_chat", { token }),
   openPath: (path: string) => invoke<void>("open_path", { path, reveal: false }),

@@ -61,7 +61,10 @@
         onclick={() => pick(s.id)}
         title={`${s.path}${i < 9 ? `  (Ctrl+${i + 1})` : ""}`}
       >
-        <span class="dot {st.status}"></span>
+        <span class="ava">
+          {#if app.icons[s.id]}<img src={app.icons[s.id]} alt="" />{:else}<span class="ini">{CORE_LABEL[s.core].slice(0, 2)}</span>{/if}
+          <span class="dot {st.status}"></span>
+        </span>
         <span class="txt">
           <span class="name">{s.name}</span>
           <span class="meta">{CORE_LABEL[s.core]} {s.mc_version}</span>
@@ -113,6 +116,10 @@
   .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .meta { font-size: 0.82em; color: var(--muted); }
   .players { display: inline-flex; align-items: center; gap: 3px; font-size: 0.8em; color: var(--ok); }
+  .ava { position: relative; width: 30px; height: 30px; flex: none; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--line); }
+  .ava img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+  .ini { display: grid; place-items: center; width: 100%; height: 100%; font-size: 0.72em; font-weight: 700; color: var(--muted); }
+  .ava .dot { position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border: 2px solid var(--bg); box-sizing: content-box; }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--line); }
   .dot.running { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
   .dot.starting, .dot.stopping { background: var(--warn); animation: blink calc(1.8s * var(--anim-k)) ease-in-out infinite; }

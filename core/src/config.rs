@@ -82,6 +82,15 @@ pub struct Theme {
     pub background: String,
     pub surface: String,
     pub text: String,
+    /// Дополнительные цвета (пусто — из встроенной темы)
+    pub surface2: String,
+    pub line: String,
+    pub muted: String,
+    pub console: String,
+    pub ok: String,
+    pub warn: String,
+    pub err: String,
+    pub info: String,
     /// Скругление углов, px
     pub radius: u32,
     /// Базовый размер шрифта, px
@@ -94,6 +103,12 @@ pub struct Theme {
     pub anim_force: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemePreset {
+    pub name: String,
+    pub theme: Theme,
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self {
@@ -102,6 +117,14 @@ impl Default for Theme {
             background: String::new(),
             surface: String::new(),
             text: String::new(),
+            surface2: String::new(),
+            line: String::new(),
+            muted: String::new(),
+            console: String::new(),
+            ok: String::new(),
+            warn: String::new(),
+            err: String::new(),
+            info: String::new(),
             radius: 10,
             font_size: 14,
             animations: true,
@@ -396,6 +419,8 @@ pub struct Config {
     pub simple_mode: bool,
     /// Звуковые оповещения
     pub sounds: crate::sound::SoundSettings,
+    /// Сохранённые пресеты темы
+    pub theme_presets: Vec<ThemePreset>,
     /// Хранить IP игроков только хэшем
     pub hash_player_ips: bool,
     /// Соль для хэшей IP (создаётся один раз)
@@ -421,6 +446,7 @@ impl Default for Config {
             network_monitor: true,
             simple_mode: false,
             sounds: Default::default(),
+            theme_presets: vec![],
             hash_player_ips: false,
             ip_salt: String::new(),
             notify: Default::default(),

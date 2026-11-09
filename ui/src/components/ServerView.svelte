@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { ask } from "@tauri-apps/plugin-dialog";
+  import { ask, open as pickFile } from "@tauri-apps/plugin-dialog";
   import Icon from "./Icon.svelte";
   import Console from "./tabs/Console.svelte";
   import Diagnostics from "./tabs/Diagnostics.svelte";
@@ -14,7 +14,7 @@
   import Players from "./tabs/Players.svelte";
   import Optimize from "./tabs/Optimize.svelte";
   import { api, bytes, CORE_LABEL, supportsMods, supportsPlugins, type Metrics, type ServerEntry } from "../lib/api";
-  import { app, status, t, fail, startServer, type Tab } from "../lib/store.svelte";
+  import { app, status, t, toast, fail, startServer, type Tab } from "../lib/store.svelte";
   import type { Key } from "../lib/i18n";
 
   let { server }: { server: ServerEntry } = $props();
@@ -75,6 +75,31 @@
     }
   }
 
+  // ---------- иконка сервера (server-icon.png в папке сервера)
+  let iconMenu = $state(false);
+  async function changeIcon() {
+    iconMenu = false;
+    const f = await pickFile({ filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }] });
+    if (typeof f !== "string") return;
+    try {
+      const uri = await api.setServerIcon(server.id, f);
+      if (uri) app.icons[server.id] = uri;
+      toast(t("icon.hint"), "ok");
+    } catch (e) {
+      fail(e);
+    }
+  }
+  async function removeIcon() {
+    iconMenu = false;
+    try {
+      const uri = await api.removeServerIcon(server.id);
+      if (uri) app.icons[server.id] = uri;
+      else delete app.icons[server.id];
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   const tabs = $derived(
     [
       { id: "console", icon: "terminal", show: true },
@@ -98,9 +123,21 @@
 
 <section class="view">
   <header class="hdr">
-    <div class="core-badge {st.status}" title={t(`status.${st.status}` as Key)}>
+    <div class="core-badge {st.status}">
       <span class="ring"></span>
-      <span class="glyph">{CORE_LABEL[server.core].slice(0, 2)}</span>
+      <button class="glyph" class:has={!!app.icons[server.id]} title={`${t(`status.${st.status}` as Key)} · ${t("icon.change")}`} onclick={() => (iconMenu = !iconMenu)}>
+        {#if app.icons[server.id]}<img src={app.icons[server.id]} alt="" />{:else}{CORE_LABEL[server.core].slice(0, 2)}{/if}
+        <span class="edit"><Icon name="settings" size={12} /></span>
+      </button>
+      {#if iconMenu}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div class="menu-veil" onclick={() => (iconMenu = false)}></div>
+        <div class="icon-menu">
+          <button onclick={changeIcon}><Icon name="folder" size={13} />{t("icon.change")}</button>
+          {#if app.icons[server.id]}<button onclick={removeIcon}><Icon name="trash" size={13} />{t("icon.remove")}</button>{/if}
+          <p>{t("icon.hint")}</p>
+        </div>
+      {/if}
     </div>
 
     <div class="ident">
@@ -201,14 +238,27 @@
     height: 44px;
     display: grid;
     place-items: center;
-    border-radius: 12px;
+    border-radius: 50%;
     background: var(--surface-2);
     border: 1px solid var(--line);
+    font: inherit;
     font-weight: 700;
     font-size: 1.05em;
     color: var(--muted);
+    position: relative;
+    padding: 0;
+    overflow: hidden;
+    cursor: pointer;
   }
-  .ring { position: absolute; inset: 0; border-radius: 16px; border: 2px solid transparent; }
+  .glyph img { width: 100%; height: 100%; object-fit: cover; }
+  .glyph .edit { position: absolute; inset: 0; display: grid; place-items: center; background: rgb(0 0 0 / 0.45); color: #fff; opacity: 0; transition: opacity calc(0.15s * var(--anim-k)); }
+  .glyph:hover .edit, .glyph:focus-visible .edit { opacity: 1; }
+  .menu-veil { position: fixed; inset: 0; z-index: 30; }
+  .icon-menu { position: absolute; z-index: 31; top: calc(100% + 6px); left: 0; width: 280px; padding: 6px; display: grid; gap: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 14px 34px rgb(0 0 0 / 0.3); }
+  .icon-menu button { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; font-size: 0.9em; text-align: left; cursor: pointer; }
+  .icon-menu button:hover { background: var(--hover); }
+  .icon-menu p { margin: 4px 10px 6px; font-size: 0.8em; color: var(--muted); line-height: 1.4; }
+  .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; }
   .running .ring { border-color: var(--ok); animation: pulse calc(3.2s * var(--anim-k)) ease-out infinite; }
   .running .glyph { color: var(--ok); }
   .starting .ring, .stopping .ring { border-color: var(--warn); border-style: dashed; animation: spin calc(7s * var(--anim-k)) linear infinite; }

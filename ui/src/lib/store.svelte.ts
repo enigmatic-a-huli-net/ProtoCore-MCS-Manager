@@ -17,6 +17,7 @@ export const app = $state({
   tab: "console" as Tab,
   view: "server" as "server" | "settings",
   branding: { logo: null as string | null, splash: null as string | null },
+  icons: {} as Record<string, string>,
   toasts: [] as Toast[],
   backup: {} as Record<string, BackupEvent | null>,
   addOpen: false,
@@ -80,6 +81,7 @@ function appendLines(id: string, lines: LogLine[]) {
 
 export async function refreshState() {
   const s = await api.state();
+  if (app.config && s.config.servers.length !== app.config.servers.length) loadIcons();
   app.config = s.config;
   app.paths = s.paths;
   app.restic = s.restic;
@@ -91,6 +93,7 @@ export async function refreshState() {
 export async function init() {
   await refreshState();
   app.branding = await api.branding().catch(() => ({ logo: null, splash: null }));
+  loadIcons();
 
   // Консоль восстанавливается из буфера ядра (окно могло быть выгружено в трей)
   for (const s of app.config!.servers) {
@@ -159,4 +162,8 @@ export async function startServer(id: string) {
     if (String(e).includes("EULA_REQUIRED")) app.eulaFor = id;
     else fail(e);
   }
+}
+
+export async function loadIcons() {
+  app.icons = await api.serverIcons().catch(() => ({}));
 }
